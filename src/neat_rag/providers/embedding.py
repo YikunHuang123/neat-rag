@@ -1,7 +1,7 @@
 from typing import List, Optional
 import openai
 
-from neat_rag.config import settings
+from neat_rag.config import settings, SUPPORTED_EMBEDDING_PROVIDERS
 from neat_rag.exceptions import EmbeddingProviderError
 from neat_rag.logger import get_logger
 
@@ -52,19 +52,49 @@ class OpenAIEmbedder:
 def get_embedder(provider: Optional[str] = None) -> OpenAIEmbedder:
     """
     Return an embedder for the given provider name.
-    Supported: "openai" (default), "gemini".
-    Reads model name and API keys from settings.
+    When provider is None, reads EMBEDDING_PROVIDER from settings.
+
+    Supported providers:
+      "openai"  — OpenAI API (default)
+      "gemini"  — Gemini via OpenAI-compatible endpoint
+      "ollama"  — Local Ollama server (OLLAMA_BASE_URL + EMBEDDING_MODEL)
+      "custom"  — Any OpenAI-compatible endpoint (EMBEDDING_BASE_URL + EMBEDDING_API_KEY)
     """
-    provider = (provider or "openai").lower()
+    provider = (provider or settings.EMBEDDING_PROVIDER).lower()
 
     if provider == "gemini":
         return OpenAIEmbedder(
             model=settings.EMBEDDING_MODEL,
             api_key=settings.GEMINI_API_KEY,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            base_url=settings.GEMINI_BASE_URL,
         )
 
-    return OpenAIEmbedder(
-        model=settings.EMBEDDING_MODEL,
-        api_key=settings.OPENAI_API_KEY,
-    )
+    elif provider == "ollama":
+        return OpenAIEmbedder(
+            model=settings.EMBEDDING_MODEL,
+            api_key=settings.OLLAMA_API_KEY,
+            base_url=f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1",
+        )
+
+    elif provider == "custom":
+        if not settings.EMBEDDING_BASE_URL:
+            raise EmbeddingProviderError(
+                "EMBEDDING_PROVIDER=custom requires EMBEDDING_BASE_URL to be set."
+            )
+        return OpenAIEmbedder(
+            model=settings.EMBEDDING_MODEL,
+            api_key=settings.EMBEDDING_API_KEY or "none",
+            base_url=settings.EMBEDDING_BASE_URL,
+        )
+
+    elif provider == "openai":
+        return OpenAIEmbedder(
+            model=settings.EMBEDDING_MODEL,
+            api_key=settings.OPENAI_API_KEY,
+        )
+        
+    else:
+        # Reaching here means Pydantic validation bypassed or explicit override failed
+        raise ValueError(
+            f"Unsupported EMBEDDING_PROVIDER '{provider}'. Supported options are: {SUPPORTED_EMBEDDING_PROVIDERS}"
+        )

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Any
 
 from neat_rag.config import settings
 from neat_rag.db.pool import PgPool
@@ -30,15 +30,19 @@ class IngestionPipeline:
         pg_pool: PgPool,
         embedder: Optional[OpenAIEmbedder] = None,
         chunking_strategy: str = "recursive",
-        chunk_size: int = 1000,
-        chunk_overlap: int = 200,
+        chunker_kwargs: Optional[dict] = None,
     ):
         self.pg_pool = pg_pool
         self.embedder = embedder or get_embedder()
+        
+        kwargs = chunker_kwargs or {}
+        # Provide sensible defaults if recursive is used without kwargs
+        if chunking_strategy == "recursive" and not kwargs:
+            kwargs = {"chunk_size": 1000, "chunk_overlap": 200}
+            
         self.chunker = get_chunker(
             strategy=chunking_strategy,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
+            **kwargs
         )
 
     async def run(
