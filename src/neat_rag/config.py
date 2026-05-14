@@ -1,6 +1,11 @@
+import os
 from typing import List
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
+
+# Force load .env and override any existing environment variables.
+load_dotenv(dotenv_path=".env", override=True)
 
 SUPPORTED_EMBEDDING_PROVIDERS = ["openai", "gemini", "ollama", "custom"]
 
@@ -56,7 +61,7 @@ class Settings(BaseSettings):
     #   anthropic : claude-3-7-sonnet-latest, claude-3-5-haiku-latest
     #   ollama    : llama3, qwen2.5
     LLM_PROVIDER: str = "gemini"
-    LLM_MODEL: str = "gemini-2.5-pro"
+    LLM_MODEL: str = "gemini-2.5-flash"
 
     # --- Embedding Configuration (Retrieval) ---
     # Options: "openai", "gemini", "ollama", "custom"

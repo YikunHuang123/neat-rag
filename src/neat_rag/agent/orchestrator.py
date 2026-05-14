@@ -96,44 +96,43 @@ async def run_query(
     """
     agent = get_agent()
 
+    # Load prior conversation turns so the agent has multi-turn context
     async with pg_pool.get_connection() as conn:
-        doc_repo = DocumentRepository(conn)
         session_repo = SessionRepository(conn)
-
-        # Load prior conversation turns so the agent has multi-turn context
         history = await load_history(session_repo, session_id)
 
-        ctx = AgentContext(
-            session_id=session_id,
-            vector_retriever=_vector_retriever,  # type: ignore[arg-type]
-            hybrid_retriever=_hybrid_retriever,  # type: ignore[arg-type]
-            doc_repo=doc_repo,
-            session_repo=session_repo,
-            user_id=user_id,
-        )
+    ctx = AgentContext(
+        session_id=session_id,
+        pg_pool=pg_pool,
+        vector_retriever=_vector_retriever,  # type: ignore[arg-type]
+        hybrid_retriever=_hybrid_retriever,  # type: ignore[arg-type]
+        user_id=user_id,
+    )
 
-        logger.info(
-            "Running agent query",
-            session_id=session_id,
-            history_turns=len(history),
-            question=question[:80],
-        )
+    logger.info(
+        "Running agent query",
+        session_id=session_id,
+        history_turns=len(history),
+        question=question[:80],
+    )
 
-        result = await agent.run(
-            question,
-            deps=ctx,
-            message_history=history,
-        )
+    result = await agent.run(
+        question,
+        deps=ctx,
+        message_history=history,
+    )
 
-        answer: str = result.output
+    answer: str = result.output
 
-        # Persist both sides of the exchange in the session
+    # Persist both sides of the exchange in the session
+    async with pg_pool.get_connection() as conn:
+        session_repo = SessionRepository(conn)
         await session_repo.add_message(session_id, MessageRole.USER, question)
         await session_repo.add_message(session_id, MessageRole.AGENT, answer)
 
-        logger.info(
-            "Agent query complete",
-            session_id=session_id,
-            answer_chars=len(answer),
-        )
-        return answer
+    logger.info(
+        "Agent query complete",
+        session_id=session_id,
+        answer_chars=len(answer),
+    )
+    return answer

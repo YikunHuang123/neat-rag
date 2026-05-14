@@ -7,15 +7,15 @@ can reference it without creating a circular import:
     tools.py   → no imports from orchestrator.py
     orchestrator.py → imports AgentContext + tool functions from tools.py
 """
-from __future__ import annotations
-
+import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, List, Dict
 
 from pydantic_ai import RunContext
 
 from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.sessions import SessionRepository
+from neat_rag.db.pool import PgPool
 from neat_rag.exceptions import ToolExecutionError
 from neat_rag.logger import get_logger
 from neat_rag.retrieval.retrievers import HybridRetriever, VectorRetriever
@@ -31,10 +31,9 @@ logger = get_logger(__name__)
 class AgentContext:
     """Carries per-request dependencies into every tool call."""
     session_id: str
+    pg_pool: PgPool
     vector_retriever: VectorRetriever
     hybrid_retriever: HybridRetriever
-    doc_repo: DocumentRepository
-    session_repo: SessionRepository
     user_id: str | None = None
     default_top_k: int = 10
     default_text_weight: float = 0.3
@@ -42,16 +41,13 @@ class AgentContext:
 
 # ---------------------------------------------------------------------------
 # Tool implementations
-# Each function is a plain async coroutine with RunContext[AgentContext] as
-# its first argument. They are registered with neat_agent in orchestrator.py
-# via  neat_agent.tool(fn)  to avoid circular imports.
 # ---------------------------------------------------------------------------
 
 async def hybrid_search(
     ctx: RunContext[AgentContext],
     query: str,
     limit: int = 10,
-) -> list[dict[str, Any]]:
+) -> List[Dict[str, Any]]:
     """
     Search for relevant information using both semantic and keyword matching.
 
@@ -81,7 +77,6 @@ async def hybrid_search(
         ]
     except Exception as e:
         logger.error("hybrid_search tool error", query=query[:60], error=str(e))
-        # Return empty rather than raising so the LLM can acknowledge the gap
         return []
 
 
@@ -89,7 +84,7 @@ async def vector_search(
     ctx: RunContext[AgentContext],
     query: str,
     limit: int = 10,
-) -> list[dict[str, Any]]:
+) -> List[Dict[str, Any]]:
     """
     Search for semantically similar content in the knowledge base.
 
@@ -121,41 +116,51 @@ async def vector_search(
 async def get_document(
     ctx: RunContext[AgentContext],
     document_id: str,
-) -> dict[str, Any] | None:
+) -> Any:
     """
     Retrieve the complete content and metadata of a specific document.
 
     Use this when you need the full document rather than individual chunks,
     for example when you already know the document_id from a previous search.
+    
+    CRITICAL: The `document_id` parameter MUST be a valid UUID string (e.g.,
+    "123e4567-e89b-12d3-a456-426614174000"). Do NOT pass the document title.
 
     Args:
         document_id: The UUID string of the document to retrieve.
     """
     try:
-        doc = await ctx.deps.doc_repo.get_document(document_id)
-        if doc is None:
-            return None
-        chunks = await ctx.deps.doc_repo.get_document_chunks(document_id)
-        return {
-            "id": doc.id,
-            "title": doc.title,
-            "source": doc.source,
-            "chunk_count": doc.chunk_count,
-            "content": "\n\n".join(c.content for c in chunks),
-            "created_at": doc.created_at.isoformat(),
-        }
-    except ToolExecutionError:
-        raise
+        # Validate UUID format to prevent database errors and guide the Agent
+        try:
+            uuid.UUID(document_id)
+        except ValueError:
+            return f"Error: '{document_id}' is not a valid UUID. Please use the technical 'id' field returned by list_documents, not the title."
+
+        async with ctx.deps.pg_pool.get_connection() as conn:
+            doc_repo = DocumentRepository(conn)
+            doc = await doc_repo.get_document(document_id)
+            if doc is None:
+                return f"Document with ID {document_id} not found."
+            
+            chunks = await doc_repo.get_document_chunks(document_id)
+            return {
+                "id": doc.id,
+                "title": doc.title,
+                "source": doc.source,
+                "chunk_count": doc.chunk_count,
+                "content": "\n\n".join(c.content for c in chunks),
+                "created_at": doc.created_at.isoformat(),
+            }
     except Exception as e:
         logger.error("get_document tool error", document_id=document_id, error=str(e))
-        raise ToolExecutionError(f"Failed to retrieve document {document_id}: {e}") from e
+        return f"Error retrieving document: {str(e)}"
 
 
 async def list_documents(
     ctx: RunContext[AgentContext],
     limit: int = 20,
     offset: int = 0,
-) -> list[dict[str, Any]]:
+) -> List[Dict[str, Any]]:
     """
     List all documents available in the knowledge base with their metadata.
 
@@ -168,17 +173,19 @@ async def list_documents(
     """
     try:
         limit = max(1, min(limit, 100))
-        docs = await ctx.deps.doc_repo.list_documents(limit=limit, offset=offset)
-        return [
-            {
-                "id": d.id,
-                "title": d.title,
-                "source": d.source,
-                "chunk_count": d.chunk_count,
-                "created_at": d.created_at.isoformat(),
-            }
-            for d in docs
-        ]
+        async with ctx.deps.pg_pool.get_connection() as conn:
+            doc_repo = DocumentRepository(conn)
+            docs = await doc_repo.list_documents(limit=limit, offset=offset)
+            return [
+                {
+                    "id": d.id,
+                    "title": d.title,
+                    "source": d.source,
+                    "chunk_count": d.chunk_count,
+                    "created_at": d.created_at.isoformat(),
+                }
+                for d in docs
+            ]
     except Exception as e:
         logger.error("list_documents tool error", error=str(e))
         return []

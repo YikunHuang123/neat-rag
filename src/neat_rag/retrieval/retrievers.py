@@ -108,7 +108,7 @@ class HybridRetriever:
 
             async with self._pg_pool.get_connection() as conn:
                 rows = await conn.fetch(
-                    "SELECT * FROM hybrid_search($1::vector, $2, $3, $4)",
+                    "SELECT * FROM hybrid_search($1::vector, $2::text, $3, $4)",
                     vec,
                     query,
                     top_k,
