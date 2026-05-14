@@ -70,9 +70,14 @@ async def main():
             print("\033[90m[Agent is thinking...]\033[0m")
             
             try:
-                # Call the orchestrator
-                answer = await run_query(question=question, session_id=session.id, user_id="test_user")
+                # Call the orchestrator (now returns answer, citations)
+                answer, citations = await run_query(question=question, session_id=session.id, user_id="test_user")
                 print(f"\n\033[92mAgent:\033[0m {answer}")
+                
+                if citations:
+                    print(f"\033[94mCitations:\033[0m")
+                    for c in citations:
+                        print(f"  [{c.citation_number}] {c.document_title}")
             except Exception as e:
                 import traceback
                 print(f"\n\033[91mError during query:\033[0m {e}")

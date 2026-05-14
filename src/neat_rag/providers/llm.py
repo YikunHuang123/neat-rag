@@ -8,7 +8,7 @@ from neat_rag.logger import get_logger
 
 logger = get_logger(__name__)
 
-SUPPORTED_LLM_PROVIDERS = ["openai", "gemini", "anthropic", "ollama"]
+SUPPORTED_LLM_PROVIDERS = ["openai", "gemini", "anthropic", "ollama", "deepseek"]
 
 
 def get_llm() -> Any:
@@ -21,6 +21,7 @@ def get_llm() -> Any:
       "gemini"    — Google Gemini
       "anthropic" — Anthropic
       "ollama"    — Local Ollama (OpenAI-compatible)
+      "deepseek"  — DeepSeek API (OpenAI-compatible)
     """
     provider = settings.LLM_PROVIDER.lower()
     model = settings.LLM_MODEL
@@ -48,6 +49,14 @@ def get_llm() -> Any:
             api_key=settings.OLLAMA_API_KEY,
         )
         return OpenAIModel(model_name=model, provider=ollama_provider)
+
+    elif provider == "deepseek":
+        logger.info("LLM provider: DeepSeek", model=model, base_url=settings.DEEPSEEK_BASE_URL)
+        deepseek_provider = OpenAIProvider(
+            base_url=f"{settings.DEEPSEEK_BASE_URL.rstrip('/')}/v1" if not settings.DEEPSEEK_BASE_URL.endswith("/v1") else settings.DEEPSEEK_BASE_URL,
+            api_key=settings.DEEPSEEK_API_KEY,
+        )
+        return OpenAIModel(model_name=model, provider=deepseek_provider)
 
     else:
         raise LLMProviderError(

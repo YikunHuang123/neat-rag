@@ -8,11 +8,12 @@ from fastapi.responses import StreamingResponse
 from neat_rag.agent.memory import load_history
 from neat_rag.agent.orchestrator import build_agent_context, get_agent, run_query
 from neat_rag.api.deps import get_connection
-from neat_rag.api.schemas import ChatRequest, ChatResponse
+from neat_rag.api.schemas import ChatRequest, ChatResponse, CitationResponse
 from neat_rag.db.pool import pg_pool
 from neat_rag.db.sessions import SessionRepository
 from neat_rag.logger import get_logger
 from neat_rag.models import MessageRole
+from neat_rag.retrieval.citation import extract_citations
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["chat"])
@@ -28,12 +29,24 @@ async def chat(
     if await session_repo.get_session(request.session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session '{request.session_id}' not found.")
 
-    answer = await run_query(
+    answer, citations = await run_query(
         request.message,
         request.session_id,
         search_type=request.search_type,
     )
-    return ChatResponse(session_id=request.session_id, content=answer)
+    return ChatResponse(
+        session_id=request.session_id, 
+        content=answer,
+        citations=[
+            CitationResponse(
+                citation_number=c.citation_number,
+                document_title=c.document_title,
+                document_source=c.document_source,
+                content_snippet=c.content_snippet,
+            )
+            for c in citations
+        ]
+    )
 
 
 @router.post("/chat/stream")
@@ -46,7 +59,7 @@ async def chat_stream(
 
     Event types:
       {"type": "delta",  "content": "<text chunk>"}
-      {"type": "done",   "message_id": "<uuid>"}
+      {"type": "done",   "message_id": "<uuid>", "citations": [...]}
       {"type": "error",  "content": "<message>"}
     Followed by a final "data: [DONE]" sentinel.
     """
@@ -78,6 +91,7 @@ async def chat_stream(
             return
 
         full_answer = "".join(chunks)
+        citations = extract_citations(full_answer, ctx.citations)
 
         # Persist both sides of the exchange using a fresh connection.
         async with pg_pool.get_connection() as persist_conn:
@@ -85,7 +99,18 @@ async def chat_stream(
             await repo.add_message(request.session_id, MessageRole.USER, request.message)
             msg = await repo.add_message(request.session_id, MessageRole.AGENT, full_answer)
 
-        yield f"data: {json.dumps({'type': 'done', 'message_id': msg.id})}\n\n"
+        # Prepare citations for the frontend
+        citation_data = [
+            {
+                "citation_number": c.citation_number,
+                "document_title": c.document_title,
+                "document_source": c.document_source,
+                "content_snippet": c.content_snippet,
+            }
+            for c in citations
+        ]
+
+        yield f"data: {json.dumps({'type': 'done', 'message_id': msg.id, 'citations': citation_data})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

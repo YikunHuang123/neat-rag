@@ -7,19 +7,25 @@ can reference it without creating a circular import:
     tools.py   → no imports from orchestrator.py
     orchestrator.py → imports AgentContext + tool functions from tools.py
 """
+import asyncio
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 
 from pydantic_ai import RunContext
 
+from neat_rag.config import settings
 from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.sessions import SessionRepository
 from neat_rag.db.pool import PgPool
 from neat_rag.exceptions import ToolExecutionError
 from neat_rag.logger import get_logger
-from neat_rag.models import SearchType
+from neat_rag.models import SearchType, Citation
 from neat_rag.retrieval.retrievers import HybridRetriever, VectorRetriever
+from neat_rag.providers.reranker import CrossEncoderReranker, CohereReranker
+from neat_rag.retrieval.rerank import rerank_hits
+from neat_rag.retrieval.rewrite import hyde_rewrite, multi_query_rewrite, rrf_merge
+from neat_rag.retrieval.citation import build_citation_context
 
 logger = get_logger(__name__)
 
@@ -35,10 +41,13 @@ class AgentContext:
     pg_pool: PgPool
     vector_retriever: VectorRetriever
     hybrid_retriever: HybridRetriever
+    reranker: Optional[CrossEncoderReranker | CohereReranker] = None
     user_id: str | None = None
     search_type: SearchType = SearchType.HYBRID
     default_top_k: int = 10
     default_text_weight: float = 0.3
+    # Citation tracking — populated by search tools, read by orchestrator
+    citations: List[Citation] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +58,7 @@ async def hybrid_search(
     ctx: RunContext[AgentContext],
     query: str,
     limit: int = 10,
-) -> List[Dict[str, Any]]:
+) -> str:
     """
     Search for relevant information using both semantic and keyword matching.
 
@@ -60,33 +69,14 @@ async def hybrid_search(
         query: The search query — a question or keywords to look up.
         limit: Maximum number of chunks to return (1–50, default 10).
     """
-    try:
-        limit = max(1, min(limit, 50))
-        result = await ctx.deps.hybrid_retriever.search(
-            query,
-            top_k=limit,
-            text_weight=ctx.deps.default_text_weight,
-        )
-        return [
-            {
-                "content": h.content,
-                "score": round(h.score, 4),
-                "document_title": h.document_title,
-                "document_source": h.document_source,
-                "chunk_id": h.chunk_id,
-            }
-            for h in result.hits
-        ]
-    except Exception as e:
-        logger.error("hybrid_search tool error", query=query[:60], error=str(e))
-        return []
+    return await _run_advanced_search(ctx, query, limit, search_mode="hybrid")
 
 
 async def vector_search(
     ctx: RunContext[AgentContext],
     query: str,
     limit: int = 10,
-) -> List[Dict[str, Any]]:
+) -> str:
     """
     Search for semantically similar content in the knowledge base.
 
@@ -97,22 +87,71 @@ async def vector_search(
         query: The search query.
         limit: Maximum number of chunks to return (1–50, default 10).
     """
+    return await _run_advanced_search(ctx, query, limit, search_mode="vector")
+
+
+async def _run_advanced_search(
+    ctx: RunContext[AgentContext],
+    query: str,
+    limit: int,
+    search_mode: str = "hybrid",
+) -> str:
+    """Internal helper to handle the full retrieval -> rerank -> citation pipeline."""
     try:
         limit = max(1, min(limit, 50))
-        result = await ctx.deps.vector_retriever.search(query, top_k=limit)
-        return [
-            {
-                "content": h.content,
-                "score": round(h.score, 4),
-                "document_title": h.document_title,
-                "document_source": h.document_source,
-                "chunk_id": h.chunk_id,
-            }
-            for h in result.hits
-        ]
+        
+        # 1. Query Rewriting (HyDE / Multi-Query)
+        # Note: In a production tool, we might skip this if the query is very short
+        queries = [query]
+        if settings.ENABLE_HYDE:
+            hyde_query = await hyde_rewrite(query)
+            queries.append(hyde_query)
+        elif settings.ENABLE_MULTI_QUERY:
+            queries = await multi_query_rewrite(query, n=settings.MULTI_QUERY_COUNT)
+
+        # 2. Retrieval
+        all_results = []
+        for q in queries:
+            # Use candidate_k if reranking is enabled to give the reranker more to work with
+            k = settings.RETRIEVE_CANDIDATE_K if settings.ENABLE_RERANK else limit
+            
+            if search_mode == "hybrid":
+                res = await ctx.deps.hybrid_retriever.search(
+                    q, top_k=k, text_weight=ctx.deps.default_text_weight
+                )
+            else:
+                res = await ctx.deps.vector_retriever.search(q, top_k=k)
+            all_results.append(res.hits)
+
+        # 3. Merge (RRF if multi-query)
+        hits = all_results[0] if len(all_results) == 1 else rrf_merge(all_results)
+
+        # 4. Rerank
+        if settings.ENABLE_RERANK and ctx.deps.reranker and hits:
+            hits = await rerank_hits(
+                query=query, 
+                hits=hits, 
+                reranker=ctx.deps.reranker, 
+                top_k=limit
+            )
+        else:
+            hits = hits[:limit]
+
+        if not hits:
+            return "No relevant information found in the knowledge base."
+
+        # 5. Citation Formatting
+        context_str, citations = build_citation_context(hits)
+        
+        # Store citations in the context so the orchestrator can retrieve them later
+        # We append to avoid losing citations from previous tool calls in the same run
+        ctx.deps.citations.extend(citations)
+
+        return context_str
+
     except Exception as e:
-        logger.error("vector_search tool error", query=query[:60], error=str(e))
-        return []
+        logger.error(f"{search_mode}_search tool error", query=query[:60], error=str(e))
+        return f"Error during search: {str(e)}"
 
 
 async def get_document(

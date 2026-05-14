@@ -20,10 +20,18 @@ class ChatRequest(BaseModel):
     search_type: SearchType = SearchType.HYBRID
 
 
+class CitationResponse(BaseModel):
+    citation_number: int
+    document_title: str
+    document_source: str
+    content_snippet: str
+
+
 class ChatResponse(BaseModel):
     session_id: str
     content: str
     message_id: Optional[str] = None
+    citations: List[CitationResponse] = Field(default_factory=list)
 
 
 # --- Documents ---

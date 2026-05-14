@@ -29,10 +29,12 @@ from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.pool import pg_pool
 from neat_rag.db.sessions import SessionRepository
 from neat_rag.logger import get_logger
-from neat_rag.models import MessageRole, SearchType
 from neat_rag.providers.embedding import get_embedder
 from neat_rag.providers.llm import get_llm
+from neat_rag.providers.reranker import get_reranker, CrossEncoderReranker, CohereReranker
 from neat_rag.retrieval.retrievers import HybridRetriever, VectorRetriever
+from neat_rag.retrieval.citation import extract_citations
+from neat_rag.models import MessageRole, SearchType, Citation
 
 logger = get_logger(__name__)
 
@@ -43,6 +45,7 @@ logger = get_logger(__name__)
 _agent: Agent[AgentContext, str] | None = None
 _vector_retriever: VectorRetriever | None = None
 _hybrid_retriever: HybridRetriever | None = None
+_reranker: CrossEncoderReranker | CohereReranker | None = None
 
 
 def get_agent() -> Agent[AgentContext, str]:
@@ -50,12 +53,13 @@ def get_agent() -> Agent[AgentContext, str]:
     Return the singleton neat_agent, creating it on first access.
     Thread-safety note: asyncio is single-threaded so a simple global is fine.
     """
-    global _agent, _vector_retriever, _hybrid_retriever
+    global _agent, _vector_retriever, _hybrid_retriever, _reranker
 
     if _agent is None:
         embedder = get_embedder()
         _vector_retriever = VectorRetriever(embedder, pg_pool)
         _hybrid_retriever = HybridRetriever(embedder, pg_pool)
+        _reranker = get_reranker()
 
         _agent = Agent(
             get_llm(),
@@ -92,6 +96,7 @@ def build_agent_context(
         pg_pool=pg_pool,
         vector_retriever=_vector_retriever,  # type: ignore[arg-type]
         hybrid_retriever=_hybrid_retriever,  # type: ignore[arg-type]
+        reranker=_reranker,
         user_id=user_id,
         search_type=search_type,
     )
@@ -102,7 +107,7 @@ async def run_query(
     session_id: str,
     user_id: str | None = None,
     search_type: SearchType = SearchType.HYBRID,
-) -> str:
+) -> tuple[str, list[Citation]]:
     """
     Run a RAG query through neat_agent and persist the exchange to the session.
 
@@ -113,7 +118,7 @@ async def run_query(
         search_type: The search strategy to use (vector or hybrid).
 
     Returns:
-        The agent's final text answer as a plain string.
+        (answer_text, citations_referenced)
     """
     agent = get_agent()
 
@@ -139,6 +144,8 @@ async def run_query(
     )
 
     answer: str = result.output
+    # Filter only the citations that the agent actually mentioned in its response
+    citations = extract_citations(answer, ctx.citations)
 
     # Persist both sides of the exchange in the session
     async with pg_pool.get_connection() as conn:
@@ -150,5 +157,6 @@ async def run_query(
         "Agent query complete",
         session_id=session_id,
         answer_chars=len(answer),
+        citations=len(citations),
     )
-    return answer
+    return answer, citations

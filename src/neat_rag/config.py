@@ -50,18 +50,22 @@ class Settings(BaseSettings):
 
     ANTHROPIC_API_KEY: str = ""
 
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_API_KEY: str = "ollama"  # Ollama ignores this, but SDK requires a non-empty string
 
     # --- LLM Configuration ---
-    # Provider options: "openai", "gemini", "ollama", "anthropic"
+    # Provider options: "openai", "gemini", "ollama", "anthropic", "deepseek"
     # Recommended models:
     #   openai    : gpt-4o, gpt-4o-mini
     #   gemini    : gemini-2.5-pro, gemini-2.5-flash
     #   anthropic : claude-3-7-sonnet-latest, claude-3-5-haiku-latest
+    #   deepseek  : deepseek-chat, deepseek-reasoner
     #   ollama    : llama3, qwen2.5
-    LLM_PROVIDER: str = "gemini"
-    LLM_MODEL: str = "gemini-2.5-flash"
+    LLM_PROVIDER: str = "deepseek"
+    LLM_MODEL: str = "deepseek-chat"
 
     # --- Embedding Configuration (Retrieval) ---
     # Options: "openai", "gemini", "ollama", "custom"
@@ -88,7 +92,33 @@ class Settings(BaseSettings):
     CHUNKING_API_KEY: str = ""
 
     # --- Reranker Configuration ---
-    RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
+    # Options for RERANKER_PROVIDER: 
+    #   "bge"    - Local CrossEncoder models (requires sentence-transformers)
+    #   "cohere" - Cohere Rerank API (requires COHERE_API_KEY)
+    #
+    # Recommended Models for "bge" (Local):
+    #   - BAAI/bge-reranker-v2-m3        : SOTA quality, Multilingual (Large: ~2GB)
+    #   - cross-encoder/ms-marco-MiniLM-L-6-v2 : Fast, English-only (Small: ~90MB)
+    #   - jinaai/jina-reranker-v1-tiny-en : Long-context (8k), English (Tiny: ~60MB)
+    #
+    # Recommended Models for "cohere" (Cloud):
+    #   - rerank-v3.5              : Newest, highest quality reasoning (Multilingual)
+    #   - rerank-multilingual-v3.0 : Standard multilingual model
+    #   - rerank-english-v3.0      : Optimized for English
+    #
+    RERANKER_PROVIDER: str = "cohere"
+    RERANKER_MODEL: str = "rerank-multilingual-v3.0"
+    COHERE_API_KEY: str = ""
+
+    # --- Advanced Retrieval Settings ---
+    ENABLE_RERANK: bool = True
+    ENABLE_HYDE: bool = False
+    ENABLE_MULTI_QUERY: bool = False
+    MULTI_QUERY_COUNT: int = 3
+    
+    # Reranking logic: retrieve CANDIDATE_K -> rerank -> return TOP_K
+    RERANK_TOP_K: int = 5
+    RETRIEVE_CANDIDATE_K: int = 25
 
     # --- Agent / Prompt Configuration ---
     # Injected into the system prompt template via {domain}
