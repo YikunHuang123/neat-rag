@@ -78,6 +78,23 @@ def get_agent() -> Agent[AgentContext, str]:
 # Public API
 # ---------------------------------------------------------------------------
 
+def build_agent_context(
+    session_id: str,
+    user_id: str | None = None,
+) -> AgentContext:
+    """
+    Build an AgentContext with the lazy-initialised retrievers.
+    Callers must invoke get_agent() first to ensure the retrievers exist.
+    """
+    return AgentContext(
+        session_id=session_id,
+        pg_pool=pg_pool,
+        vector_retriever=_vector_retriever,  # type: ignore[arg-type]
+        hybrid_retriever=_hybrid_retriever,  # type: ignore[arg-type]
+        user_id=user_id,
+    )
+
+
 async def run_query(
     question: str,
     session_id: str,
@@ -101,13 +118,7 @@ async def run_query(
         session_repo = SessionRepository(conn)
         history = await load_history(session_repo, session_id)
 
-    ctx = AgentContext(
-        session_id=session_id,
-        pg_pool=pg_pool,
-        vector_retriever=_vector_retriever,  # type: ignore[arg-type]
-        hybrid_retriever=_hybrid_retriever,  # type: ignore[arg-type]
-        user_id=user_id,
-    )
+    ctx = build_agent_context(session_id, user_id)
 
     logger.info(
         "Running agent query",
