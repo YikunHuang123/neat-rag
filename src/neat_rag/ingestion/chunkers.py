@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
-from neat_rag.config import SUPPORTED_EMBEDDING_PROVIDERS
 from neat_rag.exceptions import ChunkingError
 from neat_rag.logger import get_logger
 
@@ -88,50 +87,9 @@ class SemanticChunker:
             return []
         try:
             from langchain_experimental.text_splitter import SemanticChunker as _LCSemanticChunker
-            from neat_rag.config import settings
+            from neat_rag.providers.embedding import get_langchain_embedder
 
-            # Strictly use CHUNKING_ configuration.
-            # If not explicitly set, fallback to the main EMBEDDING_PROVIDER to keep behavior consistent
-            provider = (settings.CHUNKING_PROVIDER or "openai").lower()
-                
-            if provider == "gemini":
-                # For Gemini, use the native LangChain Google integration
-                from langchain_google_genai import GoogleGenerativeAIEmbeddings
-                
-                model_name = settings.CHUNKING_MODEL
-                if not model_name.startswith("models/"):
-                    model_name = f"models/{model_name}"
-
-                embeddings = GoogleGenerativeAIEmbeddings(
-                    model=model_name,
-                    google_api_key=settings.GEMINI_API_KEY,
-                )
-            elif provider in ["openai", "ollama", "custom"]:
-                # For OpenAI, Ollama, or Custom endpoints, use OpenAIEmbeddings
-                from langchain_openai import OpenAIEmbeddings
-                
-                if provider == "ollama":
-                    api_key = settings.OLLAMA_API_KEY
-                    base_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
-                elif provider == "custom":
-                    api_key = settings.CHUNKING_API_KEY
-                    base_url = settings.CHUNKING_BASE_URL
-                elif provider == "openai":
-                    api_key = settings.OPENAI_API_KEY
-                    base_url = None
-
-                embeddings = OpenAIEmbeddings(
-                    model=settings.CHUNKING_MODEL,
-                    api_key=api_key,
-                    base_url=base_url,
-                    # Crucial: disable tiktoken check for non-OpenAI models (like Ollama)
-                    check_embedding_ctx_length=False if provider != "openai" else True
-                )
-            else:
-                raise ValueError(
-                    f"Unsupported CHUNKING_PROVIDER '{provider}'. Supported options are: {SUPPORTED_EMBEDDING_PROVIDERS}"
-                )
-                
+            embeddings = get_langchain_embedder()
             splitter = _LCSemanticChunker(
                 embeddings=embeddings,
                 breakpoint_threshold_type=self.breakpoint_threshold_type,

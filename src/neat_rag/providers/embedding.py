@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Callable
 import openai
 
 from neat_rag.config import settings, SUPPORTED_EMBEDDING_PROVIDERS
@@ -49,52 +49,80 @@ class OpenAIEmbedder:
         return (await self.embed([text]))[0]
 
 
+# ---------------------------------------------------------------------------
+# Provider registry
+#
+# To add a new provider: add ONE entry here. get_embedder() and get_langchain_embedder() require no changes.
+#
+# Each entry has two zero-argument factory callables (lazy — settings are read at call time, not at module import time):
+#   "embedder"  → OpenAIEmbedder       used by the retrieval pipeline
+#   "langchain" → LangChain Embeddings  used by SemanticChunker
+# ---------------------------------------------------------------------------
+
+def _lc_openai_compat(api_key: str, base_url: Optional[str], check_len: bool):
+    from langchain_openai import OpenAIEmbeddings
+    return OpenAIEmbeddings(
+        model=settings.CHUNKING_MODEL,
+        api_key=api_key,
+        base_url=base_url,
+        check_embedding_ctx_length=check_len,
+    )
+
+
+def _lc_gemini():
+    from langchain_google_genai import GoogleGenerativeAIEmbeddings
+    model = settings.CHUNKING_MODEL
+    if not model.startswith("models/"):
+        model = f"models/{model}"
+    return GoogleGenerativeAIEmbeddings(model=model, google_api_key=settings.GEMINI_API_KEY)
+
+
+def _embedder_custom() -> OpenAIEmbedder:
+    if not settings.EMBEDDING_BASE_URL:
+        raise EmbeddingProviderError("EMBEDDING_PROVIDER=custom requires EMBEDDING_BASE_URL to be set.")
+    return OpenAIEmbedder(
+        model=settings.EMBEDDING_MODEL,
+        api_key=settings.EMBEDDING_API_KEY or "none",
+        base_url=settings.EMBEDDING_BASE_URL,
+    )
+
+
+_REGISTRY: dict[str, dict[str, Callable]] = {
+    "openai": {
+        "embedder":  lambda: OpenAIEmbedder(model=settings.EMBEDDING_MODEL, api_key=settings.OPENAI_API_KEY),
+        "langchain": lambda: _lc_openai_compat(settings.OPENAI_API_KEY, None, True),
+    },
+    "gemini": {
+        "embedder":  lambda: OpenAIEmbedder(model=settings.EMBEDDING_MODEL, api_key=settings.GEMINI_API_KEY, base_url=settings.GEMINI_BASE_URL),
+        "langchain": _lc_gemini,
+    },
+    "ollama": {
+        "embedder":  lambda: OpenAIEmbedder(model=settings.EMBEDDING_MODEL, api_key=settings.OLLAMA_API_KEY, base_url=f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"),
+        "langchain": lambda: _lc_openai_compat(settings.OLLAMA_API_KEY, f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1", False),
+    },
+    "custom": {
+        "embedder":  _embedder_custom,
+        "langchain": lambda: _lc_openai_compat(settings.CHUNKING_API_KEY, settings.CHUNKING_BASE_URL, False),
+    },
+}
+
+# ---------------------------------------------------------------------------
+
 def get_embedder(provider: Optional[str] = None) -> OpenAIEmbedder:
-    """
-    Return an embedder for the given provider name.
-    When provider is None, reads EMBEDDING_PROVIDER from settings.
-
-    Supported providers:
-      "openai"  — OpenAI API (default)
-      "gemini"  — Gemini via OpenAI-compatible endpoint
-      "ollama"  — Local Ollama server (OLLAMA_BASE_URL + EMBEDDING_MODEL)
-      "custom"  — Any OpenAI-compatible endpoint (EMBEDDING_BASE_URL + EMBEDDING_API_KEY)
-    """
-    provider = (provider or settings.EMBEDDING_PROVIDER).lower()
-
-    if provider == "gemini":
-        return OpenAIEmbedder(
-            model=settings.EMBEDDING_MODEL,
-            api_key=settings.GEMINI_API_KEY,
-            base_url=settings.GEMINI_BASE_URL,
+    """Return an OpenAIEmbedder for the given provider (defaults to EMBEDDING_PROVIDER)."""
+    key = (provider or settings.EMBEDDING_PROVIDER).lower()
+    if key not in _REGISTRY:
+        raise EmbeddingProviderError(
+            f"Unsupported EMBEDDING_PROVIDER '{key}'. Supported options are: {SUPPORTED_EMBEDDING_PROVIDERS}"
         )
+    return _REGISTRY[key]["embedder"]()
 
-    elif provider == "ollama":
-        return OpenAIEmbedder(
-            model=settings.EMBEDDING_MODEL,
-            api_key=settings.OLLAMA_API_KEY,
-            base_url=f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1",
-        )
 
-    elif provider == "custom":
-        if not settings.EMBEDDING_BASE_URL:
-            raise EmbeddingProviderError(
-                "EMBEDDING_PROVIDER=custom requires EMBEDDING_BASE_URL to be set."
-            )
-        return OpenAIEmbedder(
-            model=settings.EMBEDDING_MODEL,
-            api_key=settings.EMBEDDING_API_KEY or "none",
-            base_url=settings.EMBEDDING_BASE_URL,
+def get_langchain_embedder():
+    """Return a LangChain Embeddings object for SemanticChunker (uses CHUNKING_PROVIDER)."""
+    key = settings.CHUNKING_PROVIDER.lower()
+    if key not in _REGISTRY:
+        raise EmbeddingProviderError(
+            f"Unsupported CHUNKING_PROVIDER '{key}'. Supported options are: {SUPPORTED_EMBEDDING_PROVIDERS}"
         )
-
-    elif provider == "openai":
-        return OpenAIEmbedder(
-            model=settings.EMBEDDING_MODEL,
-            api_key=settings.OPENAI_API_KEY,
-        )
-        
-    else:
-        # Reaching here means Pydantic validation bypassed or explicit override failed
-        raise ValueError(
-            f"Unsupported EMBEDDING_PROVIDER '{provider}'. Supported options are: {SUPPORTED_EMBEDDING_PROVIDERS}"
-        )
+    return _REGISTRY[key]["langchain"]()
