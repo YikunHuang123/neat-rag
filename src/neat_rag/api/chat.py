@@ -28,7 +28,11 @@ async def chat(
     if await session_repo.get_session(request.session_id) is None:
         raise HTTPException(status_code=404, detail=f"Session '{request.session_id}' not found.")
 
-    answer = await run_query(request.message, request.session_id)
+    answer = await run_query(
+        request.message,
+        request.session_id,
+        search_type=request.search_type,
+    )
     return ChatResponse(session_id=request.session_id, content=answer)
 
 
@@ -55,7 +59,7 @@ async def chat_stream(
 
     async def generate() -> AsyncIterator[str]:
         agent = get_agent()  # ensures lazy retrievers are initialised
-        ctx = build_agent_context(request.session_id)
+        ctx = build_agent_context(request.session_id, search_type=request.search_type)
 
         chunks: list[str] = []
         try:

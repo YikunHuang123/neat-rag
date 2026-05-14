@@ -18,6 +18,7 @@ from neat_rag.db.sessions import SessionRepository
 from neat_rag.db.pool import PgPool
 from neat_rag.exceptions import ToolExecutionError
 from neat_rag.logger import get_logger
+from neat_rag.models import SearchType
 from neat_rag.retrieval.retrievers import HybridRetriever, VectorRetriever
 
 logger = get_logger(__name__)
@@ -35,6 +36,7 @@ class AgentContext:
     vector_retriever: VectorRetriever
     hybrid_retriever: HybridRetriever
     user_id: str | None = None
+    search_type: SearchType = SearchType.HYBRID
     default_top_k: int = 10
     default_text_weight: float = 0.3
 

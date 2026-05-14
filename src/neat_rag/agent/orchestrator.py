@@ -29,7 +29,7 @@ from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.pool import pg_pool
 from neat_rag.db.sessions import SessionRepository
 from neat_rag.logger import get_logger
-from neat_rag.models import MessageRole
+from neat_rag.models import MessageRole, SearchType
 from neat_rag.providers.embedding import get_embedder
 from neat_rag.providers.llm import get_llm
 from neat_rag.retrieval.retrievers import HybridRetriever, VectorRetriever
@@ -81,6 +81,7 @@ def get_agent() -> Agent[AgentContext, str]:
 def build_agent_context(
     session_id: str,
     user_id: str | None = None,
+    search_type: SearchType = SearchType.HYBRID,
 ) -> AgentContext:
     """
     Build an AgentContext with the lazy-initialised retrievers.
@@ -92,6 +93,7 @@ def build_agent_context(
         vector_retriever=_vector_retriever,  # type: ignore[arg-type]
         hybrid_retriever=_hybrid_retriever,  # type: ignore[arg-type]
         user_id=user_id,
+        search_type=search_type,
     )
 
 
@@ -99,6 +101,7 @@ async def run_query(
     question: str,
     session_id: str,
     user_id: str | None = None,
+    search_type: SearchType = SearchType.HYBRID,
 ) -> str:
     """
     Run a RAG query through neat_agent and persist the exchange to the session.
@@ -107,6 +110,7 @@ async def run_query(
         question:   The user's question (natural language).
         session_id: UUID of the active chat session (must already exist in DB).
         user_id:    Optional caller identity for audit / personalisation.
+        search_type: The search strategy to use (vector or hybrid).
 
     Returns:
         The agent's final text answer as a plain string.
@@ -118,12 +122,13 @@ async def run_query(
         session_repo = SessionRepository(conn)
         history = await load_history(session_repo, session_id)
 
-    ctx = build_agent_context(session_id, user_id)
+    ctx = build_agent_context(session_id, user_id, search_type=search_type)
 
     logger.info(
         "Running agent query",
         session_id=session_id,
         history_turns=len(history),
+        search_type=search_type,
         question=question[:80],
     )
 
