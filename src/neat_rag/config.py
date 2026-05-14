@@ -50,8 +50,13 @@ class Settings(BaseSettings):
 
     # --- LLM Configuration ---
     # Provider options: "openai", "gemini", "ollama", "anthropic"
-    LLM_PROVIDER: str = "openai"
-    LLM_MODEL: str = "gpt-4o-mini"
+    # Recommended models:
+    #   openai    : gpt-4o, gpt-4o-mini
+    #   gemini    : gemini-2.5-pro, gemini-2.5-flash
+    #   anthropic : claude-3-7-sonnet-latest, claude-3-5-haiku-latest
+    #   ollama    : llama3, qwen2.5
+    LLM_PROVIDER: str = "gemini"
+    LLM_MODEL: str = "gemini-2.5-pro"
 
     # --- Embedding Configuration (Retrieval) ---
     # Options: "openai", "gemini", "ollama", "custom"
@@ -79,6 +84,10 @@ class Settings(BaseSettings):
 
     # --- Reranker Configuration ---
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
+
+    # --- Agent / Prompt Configuration ---
+    # Injected into the system prompt template via {domain}
+    DOMAIN_DESCRIPTION: str = "a knowledge base of indexed documents"
 
     # --- Infrastructure ---
     REDIS_URL: str = "redis://localhost:6379/0"
