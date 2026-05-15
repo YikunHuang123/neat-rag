@@ -15,7 +15,7 @@ import streamlit as st
 # ── Page configuration ────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Neat-RAG",
-    page_icon="⚡",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -126,6 +126,26 @@ st.markdown("""
 
 /* ── Progress bar ── */
 .stProgress > div > div > div { background: linear-gradient(90deg, #7C3AED, #EC4899) !important; }
+
+/* ── Chat Input Focus ── */
+[data-testid="stChatInput"] {
+    border-radius: 12px !important;
+}
+/* Ensure the outer container and inner div use the same uniform border */
+[data-testid="stChatInput"], [data-testid="stChatInput"] > div {
+    transition: border-color 0.2s ease-in-out !important;
+}
+[data-testid="stChatInput"]:focus-within, [data-testid="stChatInput"]:focus-within > div {
+    border: 1px solid #60A5FA !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+/* Clean up the textarea internal styles */
+[data-testid="stChatInput"] textarea {
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -407,7 +427,7 @@ if st.session_state.nav == "chat":
         # Render history
         for i, msg in enumerate(st.session_state.messages):
             role = msg["role"]
-            avatar = "🧑" if role == "user" else "⚡"
+            avatar = "🧑" if role == "user" else "🤖"
             with st.chat_message(role, avatar=avatar):
                 st.markdown(msg["content"])
                 if role != "user":
@@ -422,7 +442,7 @@ if st.session_state.nav == "chat":
             with st.chat_message("user", avatar="🧑"):
                 st.markdown(prompt)
 
-            with st.chat_message("assistant", avatar="⚡"):
+            with st.chat_message("assistant", avatar="🤖"):
                 result: Dict = {"message_id": None, "citations": []}
                 answer = st.write_stream(
                     _sse_generator(prompt, sid, st.session_state.search_type, result)
