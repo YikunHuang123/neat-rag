@@ -67,23 +67,30 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "deepseek"
     LLM_MODEL: str = "deepseek-chat"
 
+    # --- Evaluation Configuration ---
+    # Provider for ragas/evaluation (recommends high-reasoning models)
+    EVAL_LLM_PROVIDER: str = "deepseek"
+    EVAL_LLM_MODEL: str = "deepseek-chat"
+
     # --- Embedding Configuration (Retrieval) ---
     # Options: "openai", "gemini", "ollama", "custom"
     EMBEDDING_PROVIDER: str = "gemini"
-    
     # Recommended combinations:
     #   openai : text-embedding-3-small (1536 dim)
-    #   gemini : gemini-embedding-001 (3072 dim)
+    #   gemini : gemini-embedding-001 (1536 dim via MRL, same MTEB as 3072)
     #   ollama : nomic-embed-text (768 dim)
+    # Note: gemini-embedding-001 natively outputs 3072 dims but supports Matryoshka
+    # truncation to 1536 (no quality loss) or 768 (0.26% loss) — keeps within
+    # pgvector HNSW's 2000-dim limit. EMBEDDING_DIM controls output dimensionality.
     EMBEDDING_MODEL: str = "gemini-embedding-001"
-    EMBEDDING_DIM: int = 3072
+    EMBEDDING_DIM: int = 1536
 
     # Used only when EMBEDDING_PROVIDER="custom"
     EMBEDDING_BASE_URL: str = ""   
     EMBEDDING_API_KEY: str = ""    
 
     # --- Chunking Configuration (Ingestion) ---
-    # Which provider to use for semantic chunking. If empty, follows EMBEDDING_PROVIDER.
+    # Which provider to use for semantic chunking.
     CHUNKING_PROVIDER: str = "gemini"
     CHUNKING_MODEL: str = "gemini-embedding-001"
     

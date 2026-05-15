@@ -16,8 +16,9 @@ class OpenAIEmbedder:
     Works with OpenAI, Gemini (via /v1beta/openai/), and local models.
     """
 
-    def __init__(self, model: str, api_key: str, base_url: Optional[str] = None):
+    def __init__(self, model: str, api_key: str, base_url: Optional[str] = None, dimensions: Optional[int] = None):
         self.model = model
+        self.dimensions = dimensions
         self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
@@ -28,6 +29,10 @@ class OpenAIEmbedder:
         if not texts:
             return []
 
+        extra_kwargs = {}
+        if self.dimensions is not None:
+            extra_kwargs["dimensions"] = self.dimensions
+
         all_vectors: List[List[float]] = []
         for i in range(0, len(texts), _BATCH_SIZE):
             batch = texts[i : i + _BATCH_SIZE]
@@ -35,6 +40,7 @@ class OpenAIEmbedder:
                 response = await self._client.embeddings.create(
                     model=self.model,
                     input=batch,
+                    **extra_kwargs,
                 )
                 all_vectors.extend(item.embedding for item in response.data)
                 logger.debug("Embedded batch", model=self.model, batch_start=i, batch_size=len(batch))
@@ -93,7 +99,7 @@ _REGISTRY: dict[str, dict[str, Callable]] = {
         "langchain": lambda: _lc_openai_compat(settings.OPENAI_API_KEY, None, True),
     },
     "gemini": {
-        "embedder":  lambda: OpenAIEmbedder(model=settings.EMBEDDING_MODEL, api_key=settings.GEMINI_API_KEY, base_url=settings.GEMINI_BASE_URL),
+        "embedder":  lambda: OpenAIEmbedder(model=settings.EMBEDDING_MODEL, api_key=settings.GEMINI_API_KEY, base_url=settings.GEMINI_BASE_URL, dimensions=settings.EMBEDDING_DIM),
         "langchain": _lc_gemini,
     },
     "ollama": {

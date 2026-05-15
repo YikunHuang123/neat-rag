@@ -63,3 +63,47 @@ def get_llm() -> Any:
             f"Unsupported LLM_PROVIDER '{provider}'. "
             f"Supported options: {SUPPORTED_LLM_PROVIDERS}"
         )
+
+
+def get_langchain_llm(provider: str = None, model: str = None) -> Any:
+    """
+    Return a LangChain-compatible ChatModel instance (BaseChatModel).
+    Used for evaluation (ragas) and other LangChain-based utilities.
+
+    Supported providers: "openai", "gemini", "deepseek", "ollama".
+    """
+    p = (provider or settings.EVAL_LLM_PROVIDER).lower()
+    m = model or settings.EVAL_LLM_MODEL
+
+    if p == "openai":
+        from langchain_openai import ChatOpenAI
+        logger.info("LangChain LLM: OpenAI", model=m)
+        return ChatOpenAI(model=m, api_key=settings.OPENAI_API_KEY)
+
+    elif p == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        logger.info("LangChain LLM: Gemini", model=m)
+        # Note: Gemini OpenAI-compatible base_url can also be used via ChatOpenAI
+        # but ChatGoogleGenerativeAI is the native LangChain way.
+        return ChatGoogleGenerativeAI(model=m, google_api_key=settings.GEMINI_API_KEY)
+
+    elif p == "deepseek":
+        from langchain_openai import ChatOpenAI
+        logger.info("LangChain LLM: DeepSeek", model=m)
+        return ChatOpenAI(
+            model=m,
+            api_key=settings.DEEPSEEK_API_KEY,
+            base_url=settings.DEEPSEEK_BASE_URL.rstrip("/") + "/v1" if not settings.DEEPSEEK_BASE_URL.endswith("/v1") else settings.DEEPSEEK_BASE_URL,
+        )
+
+    elif p == "ollama":
+        from langchain_openai import ChatOpenAI
+        logger.info("LangChain LLM: Ollama", model=m)
+        return ChatOpenAI(
+            model=m,
+            api_key=settings.OLLAMA_API_KEY,
+            base_url=f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1",
+        )
+
+    else:
+        raise LLMProviderError(f"Unsupported LangChain provider '{p}'")

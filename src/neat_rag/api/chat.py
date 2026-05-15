@@ -24,23 +24,23 @@ router = APIRouter(tags=["chat"])
 @router.post("/chat", response_model=ChatResponse)
 @limiter.limit(settings.RATE_LIMIT_CHAT)
 async def chat(
-    http_request: Request,
-    request: ChatRequest,
+    request: Request,
+    body: ChatRequest,
     conn: asyncpg.Connection = Depends(get_connection),
     _owner: Optional[str] = Depends(verify_api_key),
 ):
     """Blocking chat — waits for the full agent response before returning."""
     session_repo = SessionRepository(conn)
-    if await session_repo.get_session(request.session_id) is None:
-        raise HTTPException(status_code=404, detail=f"Session '{request.session_id}' not found.")
+    if await session_repo.get_session(body.session_id) is None:
+        raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
 
     answer, citations = await run_query(
-        request.message,
-        request.session_id,
-        search_type=request.search_type,
+        body.message,
+        body.session_id,
+        search_type=body.search_type,
     )
     return ChatResponse(
-        session_id=request.session_id,
+        session_id=body.session_id,
         content=answer,
         citations=[
             CitationResponse(
@@ -57,8 +57,8 @@ async def chat(
 @router.post("/chat/stream")
 @limiter.limit(settings.RATE_LIMIT_CHAT)
 async def chat_stream(
-    http_request: Request,
-    request: ChatRequest,
+    request: Request,
+    body: ChatRequest,
     conn: asyncpg.Connection = Depends(get_connection),
     _owner: Optional[str] = Depends(verify_api_key),
 ):
@@ -72,20 +72,20 @@ async def chat_stream(
     Followed by a final "data: [DONE]" sentinel.
     """
     session_repo = SessionRepository(conn)
-    if await session_repo.get_session(request.session_id) is None:
-        raise HTTPException(status_code=404, detail=f"Session '{request.session_id}' not found.")
+    if await session_repo.get_session(body.session_id) is None:
+        raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
 
     # Load history while the request connection is still open.
-    history = await load_history(session_repo, request.session_id)
+    history = await load_history(session_repo, body.session_id)
 
     async def generate() -> AsyncIterator[str]:
         agent = get_agent()  # ensures lazy retrievers are initialised
-        ctx = build_agent_context(request.session_id, search_type=request.search_type)
+        ctx = build_agent_context(body.session_id, search_type=body.search_type)
 
         chunks: list[str] = []
         try:
             async with agent.run_stream(
-                request.message,
+                body.message,
                 deps=ctx,
                 message_history=history,
             ) as result:
@@ -93,7 +93,7 @@ async def chat_stream(
                     chunks.append(chunk)
                     yield f"data: {json.dumps({'type': 'delta', 'content': chunk})}\n\n"
         except Exception as exc:
-            logger.error("Streaming agent error", session_id=request.session_id, error=str(exc))
+            logger.error("Streaming agent error", session_id=body.session_id, error=str(exc))
             yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
             yield "data: [DONE]\n\n"
             return
@@ -104,8 +104,8 @@ async def chat_stream(
         # Persist both sides of the exchange using a fresh connection.
         async with pg_pool.get_connection() as persist_conn:
             repo = SessionRepository(persist_conn)
-            await repo.add_message(request.session_id, MessageRole.USER, request.message)
-            msg = await repo.add_message(request.session_id, MessageRole.AGENT, full_answer)
+            await repo.add_message(body.session_id, MessageRole.USER, body.message)
+            msg = await repo.add_message(body.session_id, MessageRole.AGENT, full_answer)
 
         # Prepare citations for the frontend
         citation_data = [
