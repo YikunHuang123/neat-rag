@@ -220,6 +220,63 @@ html:not(:has([data-testid="stSidebarCollapsedControl"])) .nr-cbox {
 section[data-testid="stSidebar"] button {
     visibility: visible !important;
 }
+
+/* ── Chat message hover highlight ── */
+[data-testid="stChatMessage"] {
+    border-radius: 10px !important;
+    transition: background .18s;
+    margin-right: -20px !important;
+    padding-right: 20px !important;
+}
+[data-testid="stChatMessage"]:hover {
+    background: rgba(0, 0, 0, 0.1) !important;
+}
+
+/* ── User message default background ── */
+[data-testid="stChatMessage"]:has([aria-label*="user" i]) {
+    background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+/* ── Feedback row: hidden by default, revealed on message hover ── */
+[data-testid="stChatMessage"] [data-testid="stHorizontalBlock"] {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .15s ease;
+    max-width: 85px;
+    margin-top: 4px !important;
+    gap: 5px !important;
+}
+[data-testid="stChatMessage"]:hover [data-testid="stHorizontalBlock"] {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+
+/* ── Feedback buttons: small pill style ── */
+[data-testid="stChatMessage"] [data-testid="baseButton-secondary"] {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    font-size: 0.8rem !important;
+    min-height: 22px !important;
+    height: 22px !important;
+    line-height: 1 !important;
+    border-radius: 11px !important;
+    background: transparent !important;
+    border: 1px solid rgba(255,255,255,.12) !important;
+    color: #9ca3af !important;
+    width: 100% !important;
+}
+[data-testid="stChatMessage"] [data-testid="baseButton-secondary"] p {
+    margin: 0 !important;
+    line-height: 1 !important;
+}
+[data-testid="stChatMessage"] [data-testid="baseButton-secondary"]:hover {
+    background: rgba(255,255,255,.09) !important;
+    color: #e5e7eb !important;
+    border-color: rgba(255,255,255,.28) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -408,7 +465,7 @@ def _render_message_with_citations(content: str, citations: List[Dict], msg_key:
 def _render_feedback(message_id: Optional[str], key_suffix: str):
     if not message_id:
         return
-    c1, c2, _ = st.columns([1, 1, 10])
+    c1, c2 = st.columns([1, 1])
     with c1:
         if st.button("👍", key=f"up_{key_suffix}", help="Good answer"):
             _api("post", "/feedback", json={"message_id": message_id, "rating": 1}, silent=True)
