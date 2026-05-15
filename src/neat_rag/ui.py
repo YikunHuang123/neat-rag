@@ -5,7 +5,9 @@ Connects to the Neat-RAG backend API via HTTP.
 Run:
     streamlit run src/neat_rag/ui.py
 """
+import html as _html
 import json
+import re
 import time
 from typing import Any, Dict, Generator, List, Optional
 
@@ -24,7 +26,9 @@ st.set_page_config(
 st.markdown("""
 <style>
 /* ── Global ── */
-#MainMenu, footer, header {visibility: hidden;}
+#MainMenu, footer {visibility: hidden;}
+/* Keep header visible to ensure sidebar toggle works, but hide its background if needed */
+header { background-color: transparent !important; }
 .block-container {padding-top: 1.2rem; padding-bottom: 0; max-width: 900px;}
 
 /* ── Brand ── */
@@ -153,6 +157,68 @@ section[data-testid="stSidebar"] .stButton > button:disabled {
     border: none !important;
     box-shadow: none !important;
     outline: none !important;
+}
+
+/* ── Inline citation refs ── */
+.nr-cref {
+    display: inline-block; text-decoration: none;
+    color: #a78bfa; font-size: 0.72em; font-weight: 700;
+    vertical-align: super; cursor: pointer;
+    border: 1px solid rgba(167,139,250,.35); border-radius: 3px;
+    padding: 0 3px; margin: 0 1px; line-height: 1;
+    transition: background .15s;
+}
+.nr-cref:hover { background: rgba(124,58,237,.2); }
+
+/* ── Citation modal overlay ── */
+.nr-covl {
+    display: none;
+    position: fixed; top: 0; right: 0; bottom: 0; left: 0;
+    background: rgba(0,0,0,.58);
+    z-index: 99999;
+    justify-content: center; align-items: center;
+}
+.nr-covl:target { display: flex; }
+.nr-covl-bg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
+
+/* ── Citation modal box ── */
+.nr-cbox {
+    position: relative; z-index: 1;
+    background: #141428; border-radius: 14px;
+    padding: 1.4rem 1.6rem; max-width: 620px; width: 90%;
+    border: 1px solid rgba(124,58,237,.4);
+    box-shadow: 0 24px 64px rgba(0,0,0,.7);
+}
+.nr-cbox-hdr {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: .85rem;
+}
+.nr-cbox-num { color: #a78bfa; font-weight: 800; font-size: .95rem; }
+.nr-cbox-x {
+    color: #6b7280; text-decoration: none; font-size: 1rem;
+    padding: 3px 7px; border-radius: 5px; transition: all .15s;
+}
+.nr-cbox-x:hover { color: #e5e7eb; background: rgba(255,255,255,.09); }
+.nr-cbox-title { color: #e2e8f0; font-weight: 700; font-size: .9rem; margin-bottom: .25rem; }
+.nr-cbox-src { color: #6b7280; font-size: .71rem; margin-bottom: .95rem; }
+.nr-cbox-body {
+    color: #d1d5db; font-size: .83rem; line-height: 1.65;
+    background: rgba(255,255,255,.04); padding: .85rem 1rem;
+    border-radius: 8px; border-left: 3px solid #7C3AED;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 600px; overflow-y: auto;
+}
+
+/* ── Center modal in chat area when sidebar is open ── */
+/* When stSidebarCollapsedControl is absent → sidebar is open → shift box right by half sidebar width */
+html:not(:has([data-testid="stSidebarCollapsedControl"])) .nr-cbox {
+    transform: translateX(10.5rem);
+}
+
+/* ── Keep sidebar toggle buttons visible ── */
+[data-testid="stSidebarCollapsedControl"],
+section[data-testid="stSidebar"] button {
+    visibility: visible !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -298,6 +364,47 @@ def _render_citations(citations: List[Dict]):
 </div>""", unsafe_allow_html=True)
 
 
+def _render_message_with_citations(content: str, citations: List[Dict], msg_key: str) -> None:
+    """Render message text with [n] replaced by clickable links that open a CSS :target modal."""
+    if not citations:
+        st.markdown(content)
+        return
+
+    cite_map = {c["citation_number"]: c for c in citations}
+
+    def _replace(m: re.Match) -> str:
+        n = int(m.group(1))
+        if n not in cite_map:
+            return m.group(0)
+        return f'<a href="#nr-cm-{msg_key}-{n}" class="nr-cref">[{n}]</a>'
+
+    text_html = re.sub(r'\[(\d+)\]', _replace, content)
+
+    # Close anchor
+    close_id = f"nr-cc-{msg_key}"
+    close_anchor = f'<span id="{close_id}"></span>'
+
+    modals = ""
+    for n in sorted(cite_map):
+        c = cite_map[n]
+        modals += (
+            f'<div id="nr-cm-{msg_key}-{n}" class="nr-covl">'
+            f'<a href="#{close_id}" class="nr-covl-bg"></a>'
+            f'<div class="nr-cbox">'
+            f'<div class="nr-cbox-hdr">'
+            f'<span class="nr-cbox-num">[{n}]</span>'
+            f'<a href="#{close_id}" class="nr-cbox-x">✕</a>'
+            f'</div>'
+            f'<div class="nr-cbox-title">{_html.escape(c["document_title"])}</div>'
+            f'<div class="nr-cbox-src">{_html.escape(c["document_source"])}</div>'
+            f'<div class="nr-cbox-body">{_html.escape(c["content_snippet"])}</div>'
+            f'</div>'
+            f'</div>'
+        )
+
+    st.markdown(close_anchor + text_html + modals, unsafe_allow_html=True)
+
+
 def _render_feedback(message_id: Optional[str], key_suffix: str):
     if not message_id:
         return
@@ -368,12 +475,13 @@ with st.sidebar:
             _refresh_sessions()
 
         for s in st.session_state.sessions:
-            is_active = s["id"] == st.session_state.current_session_id
+            is_active = (s["id"] == st.session_state.current_session_id)
             sc, dc = st.columns([5, 1])
             with sc:
-                raw = s["title"]
-                short = raw if len(raw) <= 18 else raw[:17] + "…"
-                label = f"▸ {short}" if is_active else short
+                raw_t = s["title"]
+                # Sidebar truncation: 18 chars
+                short_t = raw_t if len(raw_t) <= 18 else raw_t[:17] + "…"
+                label = f"▸ {short_t}" if is_active else short_t
                 if st.button(label, key=f"s_{s['id']}", use_container_width=True, disabled=is_active):
                     st.session_state.current_session_id = s["id"]
                     _load_history(s["id"])
@@ -427,10 +535,9 @@ if st.session_state.nav == "chat":
         st.info("Create or select a session in the sidebar to start chatting.")
     else:
         # Resolve title
-        title = next(
-            (s["title"] for s in st.session_state.sessions if s["id"] == sid),
-            "Chat",
-        )
+        current_sess = next((s for s in st.session_state.sessions if s["id"] == sid), None)
+        title = current_sess["title"] if current_sess else "Chat"
+        
         st.markdown(f"## {title}")
         st.caption(f"Session `{sid[:8]}…`  ·  mode: **{st.session_state.search_type}**")
         st.divider()
@@ -440,7 +547,14 @@ if st.session_state.nav == "chat":
             role = msg["role"]
             avatar = "🧑" if role == "user" else "🤖"
             with st.chat_message(role, avatar=avatar):
-                st.markdown(msg["content"])
+                if role != "user" and msg.get("citations"):
+                    _render_message_with_citations(
+                        msg["content"],
+                        msg["citations"],
+                        msg.get("message_id") or str(i),
+                    )
+                else:
+                    st.markdown(msg["content"])
                 if role != "user":
                     _render_citations(msg.get("citations", []))
                     _render_feedback(msg.get("message_id"), key_suffix=f"hist_{i}")
@@ -468,12 +582,14 @@ if st.session_state.nav == "chat":
                 "message_id": result["message_id"],
             })
 
+            # Update session title if generated by backend
             if result.get("title"):
                 for s in st.session_state.sessions:
                     if s["id"] == sid:
                         s["title"] = result["title"]
                         break
-                st.rerun()
+            
+            st.rerun()
 
 
 # ── Documents page ────────────────────────────────────────────────────────────
@@ -583,6 +699,7 @@ elif st.session_state.nav == "documents":
 
                     jrow, jprog = st.columns([3, 2])
                     with jrow:
+                        # Fixed string literal safety
                         st.markdown(f"""
 <div class="nr-job">
   <span class="nr-job-s nr-{status}">{status.upper()}</span>
