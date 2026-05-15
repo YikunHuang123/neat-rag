@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends
 
 from neat_rag.api.deps import get_connection
 from neat_rag.api.schemas import FeedbackRequest, FeedbackResponse
-from neat_rag.db.jobs import FeedbackRepository
+from neat_rag.db.feedback import FeedbackRepository
 from neat_rag.models import Feedback
 
 router = APIRouter(tags=["feedback"])

@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 
 from neat_rag.api.schemas import ErrorResponse
 from neat_rag.config import settings
-from neat_rag.db.jobs import ApiKeyRepository
+from neat_rag.db.api_keys import ApiKeyRepository
 from neat_rag.db.pool import pg_pool
 from neat_rag.logger import get_logger
 

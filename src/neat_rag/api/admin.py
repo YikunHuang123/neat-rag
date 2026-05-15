@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from neat_rag.api.deps import get_connection
 from neat_rag.api.middleware import generate_api_key, verify_api_key
-from neat_rag.db.jobs import ApiKeyRepository
+from neat_rag.db.api_keys import ApiKeyRepository
 from neat_rag.logger import get_logger
 
 logger = get_logger(__name__)
