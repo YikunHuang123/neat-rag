@@ -39,6 +39,7 @@ class Document(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     chunk_count: int = 0
+    user_id: Optional[str] = None
 
 class Chunk(BaseModel):
     """Represents a text chunk from a document."""
@@ -77,6 +78,7 @@ class Job(BaseModel):
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    user_id: Optional[str] = None
 
 class Feedback(BaseModel):
     """Represents user feedback on an agent's message."""

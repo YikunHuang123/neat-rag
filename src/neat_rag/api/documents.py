@@ -1,10 +1,12 @@
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 import asyncpg
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 
 from neat_rag.api.deps import get_connection, get_pipeline
+from neat_rag.api.middleware import verify_api_key
 from neat_rag.api.schemas import (
     DocumentListResponse,
     DocumentResponse,
@@ -37,6 +39,7 @@ async def upload_document(
     file: UploadFile = File(...),
     conn: asyncpg.Connection = Depends(get_connection),
     pipeline: IngestionPipeline = Depends(get_pipeline),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -50,23 +53,28 @@ async def upload_document(
         raise HTTPException(status_code=413, detail="File exceeds the 50 MB limit.")
 
     job_repo = JobRepository(conn)
-    job = await job_repo.create_job(file.filename or "unknown")
+    job = await job_repo.create_job(file.filename or "unknown", user_id=owner)
 
-    # Write to a temp file; the background task is responsible for cleanup.
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(content)
     tmp.close()
 
     original_name = file.filename or "unknown"
-    background_tasks.add_task(_run_ingestion, pipeline, Path(tmp.name), job.id, original_name)
+    background_tasks.add_task(_run_ingestion, pipeline, Path(tmp.name), job.id, original_name, owner)
 
-    logger.info("Document upload accepted", filename=original_name, job_id=job.id)
+    logger.info("Document upload accepted", filename=original_name, job_id=job.id, owner=owner)
     return UploadResponse(job_id=job.id, filename=original_name)
 
 
-async def _run_ingestion(pipeline: IngestionPipeline, path: Path, job_id: str, original_name: str) -> None:
+async def _run_ingestion(
+    pipeline: IngestionPipeline,
+    path: Path,
+    job_id: str,
+    original_name: str,
+    user_id: Optional[str] = None,
+) -> None:
     try:
-        await pipeline.run(path, job_id=job_id, original_name=original_name)
+        await pipeline.run(path, job_id=job_id, original_name=original_name, user_id=user_id)
     finally:
         path.unlink(missing_ok=True)
 
@@ -76,9 +84,10 @@ async def list_documents(
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     doc_repo = DocumentRepository(conn)
-    docs = await doc_repo.list_documents(limit=limit, offset=offset)
+    docs = await doc_repo.list_documents(limit=limit, offset=offset, user_id=owner)
     return DocumentListResponse(
         items=[_to_doc_response(d) for d in docs],
         total=len(docs),
@@ -89,9 +98,10 @@ async def list_documents(
 async def get_document(
     document_id: str,
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     doc_repo = DocumentRepository(conn)
-    doc = await doc_repo.get_document(document_id)
+    doc = await doc_repo.get_document(document_id, user_id=owner)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
     return _to_doc_response(doc)
@@ -101,10 +111,11 @@ async def get_document(
 async def delete_document(
     document_id: str,
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     doc_repo = DocumentRepository(conn)
     try:
-        await doc_repo.delete_document(document_id)
+        await doc_repo.delete_document(document_id, user_id=owner)
     except RecordNotFoundError:
         raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
 
@@ -114,14 +125,23 @@ async def update_document(
     document_id: str,
     body: UpdateDocumentRequest,
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     doc_repo = DocumentRepository(conn)
+    doc = await doc_repo.get_document(document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
+    if owner is not None and doc.user_id != owner:
+        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
     try:
         await doc_repo.update_metadata(document_id, body.metadata)
     except RecordNotFoundError:
         raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
-    doc = await doc_repo.get_document(document_id)
-    return _to_doc_response(doc)  # type: ignore[arg-type]
+    doc = await doc_repo.get_document(document_id, user_id=owner)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
+    return _to_doc_response(doc)
+  # type: ignore[arg-type]
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
@@ -131,9 +151,10 @@ async def list_jobs(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     job_repo = JobRepository(conn)
-    jobs = await job_repo.list_jobs(limit=limit, offset=offset)
+    jobs = await job_repo.list_jobs(limit=limit, offset=offset, user_id=owner)
     return JobListResponse(items=[_to_job_response(j) for j in jobs])
 
 
@@ -141,10 +162,13 @@ async def list_jobs(
 async def get_job(
     job_id: str,
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     job_repo = JobRepository(conn)
     job = await job_repo.get_job(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    if owner is not None and job.user_id != owner:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return _to_job_response(job)
 
@@ -173,4 +197,6 @@ def _to_job_response(j: Job) -> JobResponse:
         error=j.error,
         created_at=j.created_at,
         updated_at=j.updated_at,
+    )
+at,
     )

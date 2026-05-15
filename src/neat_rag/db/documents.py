@@ -17,21 +17,31 @@ class DocumentRepository:
     def __init__(self, connection: Connection):
         self.conn = connection
 
-    async def get_document(self, document_id: str) -> Optional[Document]:
-        """Fetch a document by its ID."""
+    async def get_document(self, document_id: str, user_id: Optional[str] = None) -> Optional[Document]:
+        """Fetch a document by its ID, optionally filtered by user_id."""
         try:
-            row = await self.conn.fetchrow(
-                """
-                SELECT id::text, title, source, mime_type, metadata, created_at, updated_at
-                FROM documents
-                WHERE id = $1::uuid
-                """,
-                document_id
-            )
+            if user_id is not None:
+                row = await self.conn.fetchrow(
+                    """
+                    SELECT id::text, title, source, mime_type, metadata, created_at, updated_at, user_id
+                    FROM documents
+                    WHERE id = $1::uuid AND user_id = $2
+                    """,
+                    document_id,
+                    user_id,
+                )
+            else:
+                row = await self.conn.fetchrow(
+                    """
+                    SELECT id::text, title, source, mime_type, metadata, created_at, updated_at, user_id
+                    FROM documents
+                    WHERE id = $1::uuid
+                    """,
+                    document_id,
+                )
             if not row:
                 return None
-                
-            # Get chunk count via a separate query to keep model mapping clean
+
             count_row = await self.conn.fetchval(
                 "SELECT COUNT(id) FROM chunks WHERE document_id = $1::uuid", document_id
             )
@@ -44,48 +54,54 @@ class DocumentRepository:
                 metadata=json.loads(row["metadata"]) if row["metadata"] else {},
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
-                chunk_count=count_row or 0
+                chunk_count=count_row or 0,
+                user_id=row["user_id"],
             )
         except Exception as e:
             logger.error("Error fetching document", document_id=document_id, error=str(e))
             raise DatabaseError(f"Error fetching document: {e}")
 
-    async def list_documents(self, limit: int = 100, offset: int = 0, metadata_filter: Optional[Dict[str, Any]] = None) -> List[Document]:
-        """
-        List documents, optionally filtering by metadata.
-        """
+    async def list_documents(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        metadata_filter: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+    ) -> List[Document]:
+        """List documents, optionally filtered by user_id and/or metadata."""
         query = """
-            SELECT 
-                d.id::text, d.title, d.source, d.mime_type, d.metadata, d.created_at, d.updated_at,
+            SELECT
+                d.id::text, d.title, d.source, d.mime_type, d.metadata,
+                d.created_at, d.updated_at, d.user_id,
                 COUNT(c.id) AS chunk_count
             FROM documents d
             LEFT JOIN chunks c ON d.id = c.document_id
         """
-        
-        params = []
-        conditions = []
-        
+
+        params: list = []
+        conditions: list = []
+
+        if user_id is not None:
+            params.append(user_id)
+            conditions.append(f"d.user_id = ${len(params)}")
+
         if metadata_filter:
             params.append(json.dumps(metadata_filter))
             conditions.append(f"d.metadata @> ${len(params)}::jsonb")
-            
+
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-            
-        query += " GROUP BY d.id "
-        query += " ORDER BY d.created_at DESC "
-        
-        # Safely bind limit and offset
+
+        query += " GROUP BY d.id ORDER BY d.created_at DESC"
+
         params.append(limit)
         limit_idx = len(params)
         params.append(offset)
         offset_idx = len(params)
-        
         query += f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
 
         try:
             rows = await self.conn.fetch(query, *params)
-            
             return [
                 Document(
                     id=row["id"],
@@ -95,7 +111,8 @@ class DocumentRepository:
                     metadata=json.loads(row["metadata"]) if row["metadata"] else {},
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
-                    chunk_count=row["chunk_count"]
+                    chunk_count=row["chunk_count"],
+                    user_id=row["user_id"],
                 )
                 for row in rows
             ]
@@ -112,8 +129,8 @@ class DocumentRepository:
             # 1. Insert Document (Upsert logic to allow overwriting)
             await self.conn.execute(
                 """
-                INSERT INTO documents (id, title, source, mime_type, metadata, created_at, updated_at)
-                VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7)
+                INSERT INTO documents (id, title, source, mime_type, metadata, created_at, updated_at, user_id)
+                VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7, $8)
                 ON CONFLICT (id) DO UPDATE SET
                     title = EXCLUDED.title,
                     updated_at = EXCLUDED.updated_at
@@ -124,7 +141,8 @@ class DocumentRepository:
                 document.mime_type,
                 json.dumps(document.metadata),
                 document.created_at,
-                document.updated_at
+                document.updated_at,
+                document.user_id,
             )
 
             # 2. Insert Chunks
@@ -183,15 +201,23 @@ class DocumentRepository:
             logger.error("Failed to fetch chunks", document_id=document_id, error=str(e))
             raise DatabaseError(f"Failed to fetch chunks: {e}")
 
-    async def delete_document(self, document_id: str):
+    async def delete_document(self, document_id: str, user_id: Optional[str] = None):
         """
-        Deletes a document. 
-        Associated chunks will be automatically deleted by PostgreSQL's ON DELETE CASCADE constraint.
+        Deletes a document. When user_id is provided, only deletes if the document
+        belongs to that user (returns RecordNotFoundError otherwise).
+        Associated chunks are removed automatically by ON DELETE CASCADE.
         """
         try:
-            result = await self.conn.execute(
-                "DELETE FROM documents WHERE id = $1::uuid", document_id
-            )
+            if user_id is not None:
+                result = await self.conn.execute(
+                    "DELETE FROM documents WHERE id = $1::uuid AND user_id = $2",
+                    document_id,
+                    user_id,
+                )
+            else:
+                result = await self.conn.execute(
+                    "DELETE FROM documents WHERE id = $1::uuid", document_id
+                )
             if result == "DELETE 0":
                 raise RecordNotFoundError(f"Document with ID {document_id} not found.")
             logger.info("Deleted document", document_id=document_id)

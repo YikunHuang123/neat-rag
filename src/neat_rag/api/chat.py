@@ -37,17 +37,20 @@ async def chat(
     request: Request,
     body: ChatRequest,
     conn: asyncpg.Connection = Depends(get_connection),
-    _owner: Optional[str] = Depends(verify_api_key),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     """Blocking chat — waits for the full agent response before returning."""
     session_repo = SessionRepository(conn)
     session = await session_repo.get_session(body.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
+    if owner is not None and session.user_id != owner:
+        raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
 
     answer, citations = await run_query(
         body.message,
         body.session_id,
+        user_id=owner,
         search_type=body.search_type,
     )
 
@@ -75,7 +78,7 @@ async def chat_stream(
     request: Request,
     body: ChatRequest,
     conn: asyncpg.Connection = Depends(get_connection),
-    _owner: Optional[str] = Depends(verify_api_key),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     """
     Streaming chat via Server-Sent Events.
@@ -87,7 +90,7 @@ async def chat_stream(
     Followed by a final "data: [DONE]" sentinel.
     """
     session_repo = SessionRepository(conn)
-    session = await session_repo.get_session(body.session_id)
+    session = await session_repo.get_session(body.session_id, user_id=owner)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
 
@@ -96,7 +99,7 @@ async def chat_stream(
 
     async def generate() -> AsyncIterator[str]:
         agent = get_agent()  # ensures lazy retrievers are initialised
-        ctx = build_agent_context(body.session_id, search_type=body.search_type)
+        ctx = build_agent_context(body.session_id, user_id=owner, search_type=body.search_type)
 
         chunks: list[str] = []
         try:

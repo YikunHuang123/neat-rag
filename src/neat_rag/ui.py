@@ -293,6 +293,7 @@ _DEFAULTS: Dict[str, Any] = {
     "api_online": False,
     "_health_ts": 0.0,
     "_sessions_dirty": True,
+    "current_user": None,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -315,6 +316,10 @@ def _api(method: str, path: str, silent: bool = False, **kwargs) -> Optional[Dic
             resp = getattr(c, method)(url, headers=_hdrs(), **kwargs)
             if resp.status_code == 204:
                 return {}
+            if resp.status_code == 401:
+                if not silent:
+                    st.warning("Authentication required — please enter your API key in Settings.")
+                return None
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
@@ -341,6 +346,8 @@ def _health() -> bool:
 def _refresh_sessions():
     data = _api("get", "/sessions?limit=50", silent=True)
     st.session_state.sessions = data.get("items", []) if data else []
+    if st.session_state.sessions and not st.session_state.current_user:
+        st.session_state.current_user = st.session_state.sessions[0].get("user_id")
     st.session_state._sessions_dirty = False
 
 
@@ -348,6 +355,8 @@ def _create_session(title: str = "New Chat") -> Optional[Dict]:
     sess = _api("post", "/sessions", json={"title": title})
     if sess:
         st.session_state._sessions_dirty = True
+        if not st.session_state.current_user and sess.get("user_id"):
+            st.session_state.current_user = sess["user_id"]
     return sess
 
 
@@ -482,6 +491,11 @@ with st.sidebar:
     pill_cls = "nr-online" if online else "nr-offline"
     pill_txt = "Connected" if online else "Offline"
 
+    user_line = ""
+    if st.session_state.api_key:
+        user_display = st.session_state.current_user or "Authenticated"
+        user_line = f'<div style="font-size:.68rem;color:#6b7280;padding:.15rem 0 .5rem">&#128100; {user_display}</div>'
+
     st.markdown(f"""
 <div class="nr-brand">
   <div class="nr-logo">N</div>
@@ -490,6 +504,7 @@ with st.sidebar:
     <div class="nr-tag">Agentic Retrieval</div>
   </div>
 </div>
+{user_line}
 <div style="margin-bottom:.9rem">
   <span class="nr-pill {pill_cls}">
     <span class="nr-pill-dot"></span>{pill_txt}
@@ -570,6 +585,13 @@ with st.sidebar:
     )
     if new_key != st.session_state.api_key:
         st.session_state.api_key = new_key
+        # Clear all user-specific state so the new user gets a clean slate
+        st.session_state.sessions = []
+        st.session_state.current_session_id = None
+        st.session_state.messages = []
+        st.session_state.current_user = None
+        st.session_state._sessions_dirty = True
+        st.rerun()
 
     st.session_state.search_type = st.selectbox(
         "Search mode",

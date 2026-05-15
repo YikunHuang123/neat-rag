@@ -114,13 +114,16 @@ async def _run_advanced_search(
         for q in queries:
             # Use candidate_k if reranking is enabled to give the reranker more to work with
             k = settings.RETRIEVE_CANDIDATE_K if settings.ENABLE_RERANK else limit
-            
+
             if search_mode == "hybrid":
                 res = await ctx.deps.hybrid_retriever.search(
-                    q, top_k=k, text_weight=ctx.deps.default_text_weight
+                    q, top_k=k, text_weight=ctx.deps.default_text_weight,
+                    user_id=ctx.deps.user_id,
                 )
             else:
-                res = await ctx.deps.vector_retriever.search(q, top_k=k)
+                res = await ctx.deps.vector_retriever.search(
+                    q, top_k=k, user_id=ctx.deps.user_id,
+                )
             all_results.append(res.hits)
 
         # 3. Merge (RRF if multi-query)
@@ -179,7 +182,8 @@ async def get_document(
 
         async with ctx.deps.pg_pool.get_connection() as conn:
             doc_repo = DocumentRepository(conn)
-            doc = await doc_repo.get_document(document_id)
+            # Filter by user_id for security
+            doc = await doc_repo.get_document(document_id, user_id=ctx.deps.user_id)
             if doc is None:
                 return f"Document with ID {document_id} not found."
             
@@ -216,7 +220,7 @@ async def list_documents(
         limit = max(1, min(limit, 100))
         async with ctx.deps.pg_pool.get_connection() as conn:
             doc_repo = DocumentRepository(conn)
-            docs = await doc_repo.list_documents(limit=limit, offset=offset)
+            docs = await doc_repo.list_documents(limit=limit, offset=offset, user_id=ctx.deps.user_id)
             return [
                 {
                     "id": d.id,

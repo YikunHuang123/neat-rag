@@ -4,6 +4,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from neat_rag.api.deps import get_connection
+from neat_rag.api.middleware import verify_api_key
 from neat_rag.api.schemas import (
     MessageListResponse,
     MessageResponse,
@@ -23,9 +24,11 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 async def create_session(
     body: SessionCreateRequest,
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     repo = SessionRepository(conn)
-    session = await repo.create_session(user_id=body.user_id, title=body.title)
+    # Always use the authenticated owner; ignore body.user_id to prevent spoofing
+    session = await repo.create_session(user_id=owner, title=body.title)
     return _to_session_response(session)
 
 
@@ -35,9 +38,12 @@ async def list_sessions(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     repo = SessionRepository(conn)
-    sessions = await repo.list_sessions(user_id=user_id, limit=limit, offset=offset)
+    # When authenticated, always scope to the token owner regardless of query param
+    effective_user_id = owner if owner is not None else user_id
+    sessions = await repo.list_sessions(user_id=effective_user_id, limit=limit, offset=offset)
     return SessionListResponse(items=[_to_session_response(s) for s in sessions])
 
 
@@ -45,9 +51,10 @@ async def list_sessions(
 async def get_session(
     session_id: str,
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     repo = SessionRepository(conn)
-    session = await repo.get_session(session_id)
+    session = await repo.get_session(session_id, user_id=owner)
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
     return _to_session_response(session)
@@ -58,9 +65,11 @@ async def get_session_messages(
     session_id: str,
     limit: Optional[int] = Query(None, ge=1, le=500),
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     repo = SessionRepository(conn)
-    if await repo.get_session(session_id) is None:
+    session = await repo.get_session(session_id, user_id=owner)
+    if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
     messages = await repo.get_session_messages(session_id, limit=limit)
     return MessageListResponse(items=[_to_message_response(m) for m in messages])
@@ -71,13 +80,17 @@ async def update_session(
     session_id: str,
     body: SessionUpdateRequest,
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     repo = SessionRepository(conn)
     try:
-        await repo.update_session_title(session_id, body.title)
+        await repo.update_session_title(session_id, body.title, user_id=owner)
     except RecordNotFoundError:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
-    session = await repo.get_session(session_id)
+    
+    session = await repo.get_session(session_id, user_id=owner)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
     return _to_session_response(session)  # type: ignore[arg-type]
 
 
@@ -85,10 +98,11 @@ async def update_session(
 async def delete_session(
     session_id: str,
     conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
 ):
     repo = SessionRepository(conn)
     try:
-        await repo.delete_session(session_id)
+        await repo.delete_session(session_id, user_id=owner)
     except RecordNotFoundError:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
 

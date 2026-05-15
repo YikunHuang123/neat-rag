@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional  # noqa: F401 (Optional used in method signatures)
 from asyncpg import Connection
 
 from neat_rag.models import Job, JobStatus
@@ -17,6 +17,7 @@ def _row_to_job(row) -> Job:
         error=row["error"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        user_id=row["user_id"] if "user_id" in row.keys() else None,
     )
 
 
@@ -29,52 +30,80 @@ class JobRepository:
     def __init__(self, connection: Connection):
         self.conn = connection
 
-    async def create_job(self, filename: str) -> Job:
+    async def create_job(self, filename: str, user_id: Optional[str] = None) -> Job:
         """Create a new ingestion job in PENDING state and return it."""
         try:
             row = await self.conn.fetchrow(
                 """
-                INSERT INTO ingest_jobs (filename, status, progress)
-                VALUES ($1, $2, 0.0)
-                RETURNING id::text, filename, status, progress, error, created_at, updated_at
+                INSERT INTO ingest_jobs (filename, status, progress, user_id)
+                VALUES ($1, $2, 0.0, $3)
+                RETURNING id::text, filename, status, progress, error, created_at, updated_at, user_id
                 """,
                 filename,
                 JobStatus.PENDING.value,
+                user_id,
             )
             return _row_to_job(row)
         except Exception as e:
             logger.error("Failed to create job", filename=filename, error=str(e))
             raise DatabaseError(f"Failed to create job: {e}")
 
-    async def get_job(self, job_id: str) -> Optional[Job]:
-        """Fetch a job by ID. Returns None if not found."""
+    async def get_job(self, job_id: str, user_id: Optional[str] = None) -> Optional[Job]:
+        """Fetch a job by its ID, optionally filtered by user_id."""
         try:
-            row = await self.conn.fetchrow(
-                """
-                SELECT id::text, filename, status, progress, error, created_at, updated_at
-                FROM ingest_jobs
-                WHERE id = $1::uuid
-                """,
-                job_id,
-            )
+            if user_id is not None:
+                row = await self.conn.fetchrow(
+                    """
+                    SELECT id::text, filename, status, progress, error, created_at, updated_at, user_id
+                    FROM ingest_jobs
+                    WHERE id = $1::uuid AND user_id = $2
+                    """,
+                    job_id,
+                    user_id,
+                )
+            else:
+                row = await self.conn.fetchrow(
+                    """
+                    SELECT id::text, filename, status, progress, error, created_at, updated_at, user_id
+                    FROM ingest_jobs
+                    WHERE id = $1::uuid
+                    """,
+                    job_id,
+                )
             return _row_to_job(row) if row else None
         except Exception as e:
             logger.error("Failed to fetch job", job_id=job_id, error=str(e))
             raise DatabaseError(f"Failed to fetch job: {e}")
 
-    async def list_jobs(self, limit: int = 50, offset: int = 0) -> List[Job]:
-        """List all ingestion jobs ordered by creation time descending."""
+    async def list_jobs(
+        self, limit: int = 50, offset: int = 0, user_id: Optional[str] = None
+    ) -> List[Job]:
+        """List ingestion jobs, optionally filtered by user_id."""
         try:
-            rows = await self.conn.fetch(
-                """
-                SELECT id::text, filename, status, progress, error, created_at, updated_at
-                FROM ingest_jobs
-                ORDER BY created_at DESC
-                LIMIT $1 OFFSET $2
-                """,
-                limit,
-                offset,
-            )
+            if user_id is not None:
+                rows = await self.conn.fetch(
+                    """
+                    SELECT id::text, filename, status, progress, error, created_at, updated_at, user_id
+                    FROM ingest_jobs
+                    WHERE user_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2 OFFSET $3
+                    """,
+                    user_id,
+                    limit,
+                    offset,
+                )
+            else:
+                rows = await self.conn.fetch(
+                    """
+                    SELECT id::text, filename, status, progress, error, created_at, updated_at, user_id
+                    FROM ingest_jobs
+                    ORDER BY created_at DESC
+                    LIMIT $1 OFFSET $2
+                    """,
+                    limit,
+                    offset,
+                )
             return [_row_to_job(r) for r in rows]
         except Exception as e:
             logger.error("Failed to list jobs", error=str(e))

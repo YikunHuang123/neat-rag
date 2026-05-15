@@ -55,7 +55,9 @@ class VectorRetriever:
         self._embedder = embedder
         self._pg_pool = pg_pool
 
-    async def search(self, query: str, top_k: int = 10) -> SearchResult:
+    async def search(
+        self, query: str, top_k: int = 10, user_id: str | None = None
+    ) -> SearchResult:
         t0 = time.monotonic()
         try:
             embedding = await self._embedder.embed_one(query)
@@ -63,9 +65,10 @@ class VectorRetriever:
 
             async with self._pg_pool.get_connection() as conn:
                 rows = await conn.fetch(
-                    "SELECT * FROM match_chunks($1::vector, $2)",
+                    "SELECT * FROM match_chunks($1::vector, $2, $3)",
                     vec,
                     top_k,
+                    user_id,
                 )
 
             hits = _parse_hits_vector(rows)
@@ -100,6 +103,7 @@ class HybridRetriever:
         query: str,
         top_k: int = 10,
         text_weight: float = 0.3,
+        user_id: str | None = None,
     ) -> SearchResult:
         t0 = time.monotonic()
         try:
@@ -108,11 +112,12 @@ class HybridRetriever:
 
             async with self._pg_pool.get_connection() as conn:
                 rows = await conn.fetch(
-                    "SELECT * FROM hybrid_search($1::vector, $2::text, $3, $4)",
+                    "SELECT * FROM hybrid_search($1::vector, $2::text, $3, $4, $5)",
                     vec,
                     query,
                     top_k,
                     text_weight,
+                    user_id,
                 )
 
             hits = _parse_hits_hybrid(rows)

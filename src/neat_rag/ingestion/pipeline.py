@@ -51,6 +51,7 @@ class IngestionPipeline:
         file_path: Path,
         job_id: Optional[str] = None,
         original_name: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Document:
         """
         Ingest a single file end-to-end. If job_id is provided, progress is written
@@ -103,6 +104,7 @@ class IngestionPipeline:
                     created_at=now,
                     updated_at=now,
                     chunk_count=len(raw_chunks),
+                    user_id=user_id,
                 )
                 chunks = [
                     Chunk(

@@ -41,17 +41,28 @@ class SessionRepository:
             logger.error("Failed to create session", user_id=user_id, error=str(e))
             raise DatabaseError(f"Failed to create session: {e}")
 
-    async def get_session(self, session_id: str) -> Optional[Session]:
-        """Fetch a session by its ID. Returns None if not found."""
+    async def get_session(self, session_id: str, user_id: Optional[str] = None) -> Optional[Session]:
+        """Fetch a session by its ID, optionally filtered by user_id."""
         try:
-            row = await self.conn.fetchrow(
-                """
-                SELECT id::text, user_id, title, created_at, updated_at
-                FROM sessions
-                WHERE id = $1::uuid
-                """,
-                session_id,
-            )
+            if user_id is not None:
+                row = await self.conn.fetchrow(
+                    """
+                    SELECT id::text, user_id, title, created_at, updated_at
+                    FROM sessions
+                    WHERE id = $1::uuid AND user_id = $2
+                    """,
+                    session_id,
+                    user_id,
+                )
+            else:
+                row = await self.conn.fetchrow(
+                    """
+                    SELECT id::text, user_id, title, created_at, updated_at
+                    FROM sessions
+                    WHERE id = $1::uuid
+                    """,
+                    session_id,
+                )
             if not row:
                 return None
             return Session(
@@ -222,3 +233,4 @@ class SessionRepository:
         except Exception as e:
             logger.error("Failed to fetch messages", session_id=session_id, error=str(e))
             raise DatabaseError(f"Failed to fetch messages: {e}")
+aise DatabaseError(f"Failed to fetch messages: {e}")
