@@ -118,6 +118,14 @@ st.markdown("""
 .stButton > button {
     border-radius: 8px !important; font-weight: 600 !important; transition: all .18s !important;
 }
+/* Active session button (disabled state in sidebar) */
+section[data-testid="stSidebar"] .stButton > button:disabled {
+    background-color: rgba(96, 165, 250, 0.15) !important;
+    color: #60A5FA !important;
+    border: 1px solid rgba(96, 165, 250, 0.3) !important;
+    opacity: 1 !important;
+    cursor: default !important;
+}
 
 /* ── Tab highlight ── */
 .stTabs [aria-selected="true"] {
@@ -362,8 +370,8 @@ with st.sidebar:
             is_active = s["id"] == st.session_state.current_session_id
             sc, dc = st.columns([5, 1])
             with sc:
-                label = ("▸  " if is_active else "    ") + s["title"]
-                if st.button(label, key=f"s_{s['id']}", use_container_width=True):
+                label = f"▸ {s['title']}" if is_active else s["title"]
+                if st.button(label, key=f"s_{s['id']}", use_container_width=True, disabled=is_active):
                     st.session_state.current_session_id = s["id"]
                     _load_history(s["id"])
                     st.rerun()
