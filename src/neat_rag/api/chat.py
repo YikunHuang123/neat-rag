@@ -84,14 +84,33 @@ async def chat_stream(
 
         chunks: list[str] = []
         try:
-            async with agent.run_stream(
-                body.message,
-                deps=ctx,
-                message_history=history,
-            ) as result:
-                async for chunk in result.stream_text(delta=True):
+            # Fallback for providers whose streaming tool-call JSON deltas are incompatible
+            # with pydantic-ai's stream reconstruction logic.
+            if settings.LLM_PROVIDER.lower() in ["deepseek", "ollama"]:
+                import asyncio
+                result = await agent.run(
+                    body.message,
+                    deps=ctx,
+                    message_history=history,
+                )
+                
+                # Simulate streaming output so the UI still animates
+                text = result.output
+                chunk_size = 15
+                for i in range(0, len(text), chunk_size):
+                    chunk = text[i:i+chunk_size]
                     chunks.append(chunk)
                     yield f"data: {json.dumps({'type': 'delta', 'content': chunk})}\n\n"
+                    await asyncio.sleep(0.01)
+            else:
+                async with agent.run_stream(
+                    body.message,
+                    deps=ctx,
+                    message_history=history,
+                ) as result:
+                    async for chunk in result.stream_text(delta=True):
+                        chunks.append(chunk)
+                        yield f"data: {json.dumps({'type': 'delta', 'content': chunk})}\n\n"
         except Exception as exc:
             logger.error("Streaming agent error", session_id=body.session_id, error=str(exc))
             yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
