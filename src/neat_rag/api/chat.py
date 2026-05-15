@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import AsyncIterator, Optional
 
@@ -7,6 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from neat_rag.agent.memory import load_history
 from neat_rag.agent.orchestrator import build_agent_context, get_agent, run_query
+from neat_rag.agent.title import generate_session_title
 from neat_rag.api.deps import get_connection
 from neat_rag.api.middleware import limiter, verify_api_key
 from neat_rag.api.schemas import ChatRequest, ChatResponse, CitationResponse
@@ -21,6 +23,14 @@ logger = get_logger(__name__)
 router = APIRouter(tags=["chat"])
 
 
+async def _update_title(session_id: str, user_message: str) -> None:
+    """Background task: generate a title and persist it."""
+    title = await generate_session_title(user_message)
+    async with pg_pool.get_connection() as conn:
+        await SessionRepository(conn).update_session_title(session_id, title)
+    logger.info("Session title updated", session_id=session_id, title=title)
+
+
 @router.post("/chat", response_model=ChatResponse)
 @limiter.limit(settings.RATE_LIMIT_CHAT)
 async def chat(
@@ -31,7 +41,8 @@ async def chat(
 ):
     """Blocking chat — waits for the full agent response before returning."""
     session_repo = SessionRepository(conn)
-    if await session_repo.get_session(body.session_id) is None:
+    session = await session_repo.get_session(body.session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
 
     answer, citations = await run_query(
@@ -39,6 +50,10 @@ async def chat(
         body.session_id,
         search_type=body.search_type,
     )
+
+    if session.title == "New Chat":
+        asyncio.create_task(_update_title(body.session_id, body.message))
+
     return ChatResponse(
         session_id=body.session_id,
         content=answer,
@@ -72,7 +87,8 @@ async def chat_stream(
     Followed by a final "data: [DONE]" sentinel.
     """
     session_repo = SessionRepository(conn)
-    if await session_repo.get_session(body.session_id) is None:
+    session = await session_repo.get_session(body.session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
 
     # Load history while the request connection is still open.
@@ -137,7 +153,14 @@ async def chat_stream(
             for c in citations
         ]
 
-        yield f"data: {json.dumps({'type': 'done', 'message_id': msg.id, 'citations': citation_data})}\n\n"
+        new_title: str | None = None
+        if session.title == "New Chat":
+            new_title = await generate_session_title(body.message)
+            async with pg_pool.get_connection() as title_conn:
+                await SessionRepository(title_conn).update_session_title(body.session_id, new_title)
+            logger.info("Session title updated", session_id=body.session_id, title=new_title)
+
+        yield f"data: {json.dumps({'type': 'done', 'message_id': msg.id, 'citations': citation_data, 'title': new_title})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

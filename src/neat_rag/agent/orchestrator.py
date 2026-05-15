@@ -127,6 +127,9 @@ async def run_query(
         session_repo = SessionRepository(conn)
         history = await load_history(session_repo, session_id)
 
+    # Sanitize question to remove potential Unicode surrogates that cause encoding errors
+    question = question.encode("utf-8", "ignore").decode("utf-8")
+
     ctx = build_agent_context(session_id, user_id, search_type=search_type)
 
     logger.info(

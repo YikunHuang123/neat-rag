@@ -276,6 +276,7 @@ def _sse_generator(
                     elif t == "done":
                         result["message_id"] = ev.get("message_id")
                         result["citations"] = ev.get("citations", [])
+                        result["title"] = ev.get("title")
                     elif t == "error":
                         raise RuntimeError(ev.get("content", "Stream error"))
     except Exception as exc:
@@ -370,7 +371,9 @@ with st.sidebar:
             is_active = s["id"] == st.session_state.current_session_id
             sc, dc = st.columns([5, 1])
             with sc:
-                label = f"▸ {s['title']}" if is_active else s["title"]
+                raw = s["title"]
+                short = raw if len(raw) <= 18 else raw[:17] + "…"
+                label = f"▸ {short}" if is_active else short
                 if st.button(label, key=f"s_{s['id']}", use_container_width=True, disabled=is_active):
                     st.session_state.current_session_id = s["id"]
                     _load_history(s["id"])
@@ -464,6 +467,13 @@ if st.session_state.nav == "chat":
                 "citations": result["citations"],
                 "message_id": result["message_id"],
             })
+
+            if result.get("title"):
+                for s in st.session_state.sessions:
+                    if s["id"] == sid:
+                        s["title"] = result["title"]
+                        break
+                st.rerun()
 
 
 # ── Documents page ────────────────────────────────────────────────────────────
