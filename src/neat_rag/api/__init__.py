@@ -5,7 +5,11 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
+from neat_rag.api.middleware import limiter, rate_limit_exceeded_handler
 from neat_rag.api.schemas import ErrorResponse
 from neat_rag.config import settings
 from neat_rag.db.pool import pg_pool
@@ -19,7 +23,7 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     setup_logging()
     await pg_pool.connect()
-    logger.info("Neat-RAG API started", env=settings.APP_ENV)
+    logger.info("Neat-RAG API started", env=settings.APP_ENV, auth_enabled=settings.ENABLE_AUTH)
     yield
     await pg_pool.disconnect()
     logger.info("Neat-RAG API stopped")
@@ -32,6 +36,11 @@ def create_app() -> FastAPI:
         description="A modern Agentic RAG system with Pydantic AI and PostgreSQL",
         lifespan=lifespan,
     )
+
+    # ── Rate limiter state ────────────────────────────────────────────────────
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
 
     # ── CORS ──────────────────────────────────────────────────────────────────
     app.add_middleware(
@@ -84,6 +93,7 @@ def create_app() -> FastAPI:
     from neat_rag.api.feedback import router as feedback_router
     from neat_rag.api.health import router as health_router
     from neat_rag.api.sessions import router as sessions_router
+    from neat_rag.api.admin import router as admin_router
 
     app.include_router(health_router)
     app.include_router(documents_router)
@@ -91,6 +101,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router)
     app.include_router(sessions_router)
     app.include_router(feedback_router)
+    app.include_router(admin_router)
 
     return app
 

@@ -124,6 +124,13 @@ class Settings(BaseSettings):
     # Injected into the system prompt template via {domain}
     DOMAIN_DESCRIPTION: str = "a knowledge base of indexed documents"
 
+    # --- Security & Rate Limiting ---
+    # Set ENABLE_AUTH=true in production and issue keys via the /admin/keys endpoint
+    ENABLE_AUTH: bool = False
+    # slowapi limit strings — see https://limits.readthedocs.io/en/stable/string-notation.html
+    RATE_LIMIT_DEFAULT: str = "60/minute"
+    RATE_LIMIT_CHAT: str = "10/minute"
+
     # --- Infrastructure ---
     REDIS_URL: str = "redis://localhost:6379/0"
 

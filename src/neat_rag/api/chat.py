@@ -1,14 +1,16 @@
 import json
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from neat_rag.agent.memory import load_history
 from neat_rag.agent.orchestrator import build_agent_context, get_agent, run_query
 from neat_rag.api.deps import get_connection
+from neat_rag.api.middleware import limiter, verify_api_key
 from neat_rag.api.schemas import ChatRequest, ChatResponse, CitationResponse
+from neat_rag.config import settings
 from neat_rag.db.pool import pg_pool
 from neat_rag.db.sessions import SessionRepository
 from neat_rag.logger import get_logger
@@ -20,9 +22,12 @@ router = APIRouter(tags=["chat"])
 
 
 @router.post("/chat", response_model=ChatResponse)
+@limiter.limit(settings.RATE_LIMIT_CHAT)
 async def chat(
+    http_request: Request,
     request: ChatRequest,
     conn: asyncpg.Connection = Depends(get_connection),
+    _owner: Optional[str] = Depends(verify_api_key),
 ):
     """Blocking chat — waits for the full agent response before returning."""
     session_repo = SessionRepository(conn)
@@ -35,7 +40,7 @@ async def chat(
         search_type=request.search_type,
     )
     return ChatResponse(
-        session_id=request.session_id, 
+        session_id=request.session_id,
         content=answer,
         citations=[
             CitationResponse(
@@ -50,9 +55,12 @@ async def chat(
 
 
 @router.post("/chat/stream")
+@limiter.limit(settings.RATE_LIMIT_CHAT)
 async def chat_stream(
+    http_request: Request,
     request: ChatRequest,
     conn: asyncpg.Connection = Depends(get_connection),
+    _owner: Optional[str] = Depends(verify_api_key),
 ):
     """
     Streaming chat via Server-Sent Events.

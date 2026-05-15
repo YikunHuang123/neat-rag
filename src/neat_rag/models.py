@@ -87,6 +87,15 @@ class Feedback(BaseModel):
     comment: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+class ApiKey(BaseModel):
+    """Represents an API key used for authenticating requests."""
+    id: str
+    hashed_key: str
+    owner: str
+    scopes: List[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_used_at: Optional[datetime] = None
+
 # --- Internal Retrieval & Processing Models ---
 
 class SearchHit(BaseModel):
