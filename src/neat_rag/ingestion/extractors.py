@@ -52,7 +52,7 @@ class PdfExtractor:
             doc = result.document
             content = doc.export_to_markdown()
             metadata = {
-                "title": file_path.stem,
+                "title": file_path.name,
                 "source": str(file_path),
                 "mime_type": "application/pdf",
                 "pages": len(doc.pages),
@@ -82,7 +82,7 @@ class DocxExtractor:
             paragraphs = [p.text for p in document.paragraphs if p.text.strip()]
             content = "\n\n".join(paragraphs)
             metadata = {
-                "title": file_path.stem,
+                "title": file_path.name,
                 "source": str(file_path),
                 "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 "extraction_method": "python-docx",
@@ -105,7 +105,7 @@ class MarkdownExtractor:
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
             metadata = {
-                "title": file_path.stem,
+                "title": file_path.name,
                 "source": str(file_path),
                 "mime_type": "text/markdown",
                 "extraction_method": "plain",
@@ -126,7 +126,7 @@ class PlainTextExtractor:
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
             metadata = {
-                "title": file_path.stem,
+                "title": file_path.name,
                 "source": str(file_path),
                 "mime_type": "text/plain",
                 "extraction_method": "plain",
@@ -150,7 +150,7 @@ class HtmlExtractor:
             # trafilatura.extract returns None if it can't parse; fall back to raw html
             content = trafilatura.extract(raw_html) or raw_html
             metadata = {
-                "title": file_path.stem,
+                "title": file_path.name,
                 "source": str(file_path),
                 "mime_type": "text/html",
                 "extraction_method": "trafilatura",
@@ -179,13 +179,19 @@ _EXT_MAP: Dict[str, type] = {
 
 SUPPORTED_EXTENSIONS = set(_EXT_MAP.keys())
 
+# Extractor singletons — heavy extractors (PdfExtractor/Docling) are expensive
+# to initialize; reuse instances across requests to avoid reloading models.
+_extractor_cache: Dict[str, Any] = {}
+
 
 def dispatch_by_ext(file_path: Path) -> "PdfExtractor | DocxExtractor | MarkdownExtractor | PlainTextExtractor | HtmlExtractor":
-    """Return the right extractor instance for the given file extension."""
+    """Return a cached extractor instance for the given file extension."""
     ext = file_path.suffix.lower()
     extractor_cls = _EXT_MAP.get(ext)
     if extractor_cls is None:
         raise UnsupportedFileTypeError(
             f"Unsupported file type '{ext}'. Supported: {sorted(SUPPORTED_EXTENSIONS)}"
         )
-    return extractor_cls()
+    if ext not in _extractor_cache:
+        _extractor_cache[ext] = extractor_cls()
+    return _extractor_cache[ext]

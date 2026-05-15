@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +50,7 @@ class IngestionPipeline:
         self,
         file_path: Path,
         job_id: Optional[str] = None,
+        original_name: Optional[str] = None,
     ) -> Document:
         """
         Ingest a single file end-to-end. If job_id is provided, progress is written
@@ -64,16 +66,21 @@ class IngestionPipeline:
 
             try:
                 # ── Step 1: Extract ──────────────────────────────────────
+                # Run in a thread pool — extraction (especially Docling PDF) is
+                # synchronous and CPU-intensive; blocking here would freeze the
+                # entire async event loop for all concurrent requests.
                 await _update_job(job_repo, job_id, 0.1, JobStatus.PROCESSING)
                 extractor = dispatch_by_ext(file_path)
-                content, metadata = extractor.extract(file_path)
+                content, metadata = await asyncio.to_thread(extractor.extract, file_path)
                 if not content.strip():
                     raise IngestionError(f"Extraction produced empty content for '{file_path.name}'")
                 logger.info("Extraction done", file=file_path.name, content_len=len(content))
 
                 # ── Step 2: Chunk ────────────────────────────────────────
                 await _update_job(job_repo, job_id, 0.3, JobStatus.PROCESSING)
-                raw_chunks: List[RawChunk] = self.chunker.chunk(content, metadata)
+                raw_chunks: List[RawChunk] = await asyncio.to_thread(
+                    self.chunker.chunk, content, metadata
+                )
                 if not raw_chunks:
                     raise IngestionError(f"Chunking produced no chunks for '{file_path.name}'")
                 logger.info("Chunking done", file=file_path.name, chunks=len(raw_chunks))
@@ -86,10 +93,11 @@ class IngestionPipeline:
                 # ── Step 4: Assemble domain models ───────────────────────
                 await _update_job(job_repo, job_id, 0.8, JobStatus.PROCESSING)
                 now = datetime.now(timezone.utc)
+                display_name = original_name or file_path.name
                 document = Document(
                     id=str(uuid.uuid4()),
-                    title=metadata.get("title", file_path.stem),
-                    source=metadata.get("source", str(file_path)),
+                    title=display_name,
+                    source=display_name,
                     mime_type=metadata.get("mime_type", "application/octet-stream"),
                     metadata={k: v for k, v in metadata.items() if k != "title"},
                     created_at=now,

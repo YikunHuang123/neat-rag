@@ -57,15 +57,16 @@ async def upload_document(
     tmp.write(content)
     tmp.close()
 
-    background_tasks.add_task(_run_ingestion, pipeline, Path(tmp.name), job.id)
+    original_name = file.filename or "unknown"
+    background_tasks.add_task(_run_ingestion, pipeline, Path(tmp.name), job.id, original_name)
 
-    logger.info("Document upload accepted", filename=file.filename, job_id=job.id)
-    return UploadResponse(job_id=job.id, filename=file.filename or "unknown")
+    logger.info("Document upload accepted", filename=original_name, job_id=job.id)
+    return UploadResponse(job_id=job.id, filename=original_name)
 
 
-async def _run_ingestion(pipeline: IngestionPipeline, path: Path, job_id: str) -> None:
+async def _run_ingestion(pipeline: IngestionPipeline, path: Path, job_id: str, original_name: str) -> None:
     try:
-        await pipeline.run(path, job_id=job_id)
+        await pipeline.run(path, job_id=job_id, original_name=original_name)
     finally:
         path.unlink(missing_ok=True)
 
