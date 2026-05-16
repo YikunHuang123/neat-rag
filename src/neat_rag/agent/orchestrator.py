@@ -28,6 +28,7 @@ from neat_rag.agent.tools import (
 from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.pool import pg_pool
 from neat_rag.db.sessions import SessionRepository
+from neat_rag.db.vector_store import get_vector_store
 from neat_rag.logger import get_logger
 from neat_rag.providers.embedding import get_embedder
 from neat_rag.providers.llm import get_llm
@@ -57,8 +58,9 @@ def get_agent() -> Agent[AgentContext, str]:
 
     if _agent is None:
         embedder = get_embedder()
-        _vector_retriever = VectorRetriever(embedder, pg_pool)
-        _hybrid_retriever = HybridRetriever(embedder, pg_pool)
+        store = get_vector_store()
+        _vector_retriever = VectorRetriever(embedder, store)
+        _hybrid_retriever = HybridRetriever(embedder, store)
         _reranker = get_reranker()
 
         _agent = Agent(
@@ -66,7 +68,7 @@ def get_agent() -> Agent[AgentContext, str]:
             deps_type=AgentContext,
             system_prompt=build_system_prompt(),
         )
-        
+
         for tool in AGENT_TOOLS:
             _agent.tool(tool)
 
@@ -94,6 +96,7 @@ def build_agent_context(
     return AgentContext(
         session_id=session_id,
         pg_pool=pg_pool,
+        vector_store=get_vector_store(),
         vector_retriever=_vector_retriever,  # type: ignore[arg-type]
         hybrid_retriever=_hybrid_retriever,  # type: ignore[arg-type]
         reranker=_reranker,

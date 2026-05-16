@@ -23,7 +23,7 @@ class DocumentRepository:
             if user_id is not None:
                 row = await self.conn.fetchrow(
                     """
-                    SELECT id::text, title, source, mime_type, metadata, created_at, updated_at, user_id
+                    SELECT id::text, title, source, mime_type, metadata, created_at, updated_at, user_id, chunk_count
                     FROM documents
                     WHERE id = $1::uuid AND user_id = $2
                     """,
@@ -33,7 +33,7 @@ class DocumentRepository:
             else:
                 row = await self.conn.fetchrow(
                     """
-                    SELECT id::text, title, source, mime_type, metadata, created_at, updated_at, user_id
+                    SELECT id::text, title, source, mime_type, metadata, created_at, updated_at, user_id, chunk_count
                     FROM documents
                     WHERE id = $1::uuid
                     """,
@@ -41,22 +41,7 @@ class DocumentRepository:
                 )
             if not row:
                 return None
-
-            count_row = await self.conn.fetchval(
-                "SELECT COUNT(id) FROM chunks WHERE document_id = $1::uuid", document_id
-            )
-
-            return Document(
-                id=row["id"],
-                title=row["title"],
-                source=row["source"],
-                mime_type=row.get("mime_type", "application/octet-stream"),
-                metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-                chunk_count=count_row or 0,
-                user_id=row["user_id"],
-            )
+            return _row_to_document(row)
         except Exception as e:
             logger.error("Error fetching document", document_id=document_id, error=str(e))
             raise DatabaseError(f"Error fetching document: {e}")
@@ -70,12 +55,9 @@ class DocumentRepository:
     ) -> List[Document]:
         """List documents, optionally filtered by user_id and/or metadata."""
         query = """
-            SELECT
-                d.id::text, d.title, d.source, d.mime_type, d.metadata,
-                d.created_at, d.updated_at, d.user_id,
-                COUNT(c.id) AS chunk_count
-            FROM documents d
-            LEFT JOIN chunks c ON d.id = c.document_id
+            SELECT id::text, title, source, mime_type, metadata,
+                   created_at, updated_at, user_id, chunk_count
+            FROM documents
         """
 
         params: list = []
@@ -83,16 +65,16 @@ class DocumentRepository:
 
         if user_id is not None:
             params.append(user_id)
-            conditions.append(f"d.user_id = ${len(params)}")
+            conditions.append(f"user_id = ${len(params)}")
 
         if metadata_filter:
             params.append(json.dumps(metadata_filter))
-            conditions.append(f"d.metadata @> ${len(params)}::jsonb")
+            conditions.append(f"metadata @> ${len(params)}::jsonb")
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
 
-        query += " GROUP BY d.id ORDER BY d.created_at DESC"
+        query += " ORDER BY created_at DESC"
 
         params.append(limit)
         limit_idx = len(params)
@@ -102,38 +84,26 @@ class DocumentRepository:
 
         try:
             rows = await self.conn.fetch(query, *params)
-            return [
-                Document(
-                    id=row["id"],
-                    title=row["title"],
-                    source=row["source"],
-                    mime_type=row.get("mime_type", "application/octet-stream"),
-                    metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-                    created_at=row["created_at"],
-                    updated_at=row["updated_at"],
-                    chunk_count=row["chunk_count"],
-                    user_id=row["user_id"],
-                )
-                for row in rows
-            ]
+            return [_row_to_document(row) for row in rows]
         except Exception as e:
             logger.error("Failed to list documents", error=str(e))
             raise DatabaseError(f"Failed to list documents: {e}")
 
-    async def save_document_and_chunks(self, document: Document, chunks: List[Chunk]):
+    async def save_document(self, document: Document) -> None:
         """
-        Saves a document and its associated chunks in a single operation.
-        Note: The caller MUST wrap this method call inside `async with pg_pool.transaction():`
+        Insert or update a document record only (no chunks).
+        Used by the ingestion pipeline when chunk storage is handled separately
+        by the active VectorStore backend.
         """
         try:
-            # 1. Insert Document (Upsert logic to allow overwriting)
             await self.conn.execute(
                 """
-                INSERT INTO documents (id, title, source, mime_type, metadata, created_at, updated_at, user_id)
-                VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7, $8)
+                INSERT INTO documents (id, title, source, mime_type, metadata, created_at, updated_at, user_id, chunk_count)
+                VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
                 ON CONFLICT (id) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    updated_at = EXCLUDED.updated_at
+                    title       = EXCLUDED.title,
+                    updated_at  = EXCLUDED.updated_at,
+                    chunk_count = EXCLUDED.chunk_count
                 """,
                 document.id,
                 document.title,
@@ -143,6 +113,41 @@ class DocumentRepository:
                 document.created_at,
                 document.updated_at,
                 document.user_id,
+                document.chunk_count,
+            )
+            logger.info("Document saved", document_id=document.id)
+        except Exception as e:
+            logger.error("Failed to save document", document_id=document.id, error=str(e))
+            raise DatabaseError(f"Failed to save document: {e}")
+
+    async def save_document_and_chunks(self, document: Document, chunks: List[Chunk]):
+        """
+        Saves a document and its associated chunks in a single operation.
+        Note: The caller MUST wrap this method call inside `async with pg_pool.transaction():`
+
+        Preserved for backwards compatibility. Prefer save_document() + VectorStore.upsert_chunks()
+        for new code paths that need backend-agnostic chunk storage.
+        """
+        try:
+            # 1. Insert Document (Upsert logic to allow overwriting)
+            await self.conn.execute(
+                """
+                INSERT INTO documents (id, title, source, mime_type, metadata, created_at, updated_at, user_id, chunk_count)
+                VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
+                ON CONFLICT (id) DO UPDATE SET
+                    title       = EXCLUDED.title,
+                    updated_at  = EXCLUDED.updated_at,
+                    chunk_count = EXCLUDED.chunk_count
+                """,
+                document.id,
+                document.title,
+                document.source,
+                document.mime_type,
+                json.dumps(document.metadata),
+                document.created_at,
+                document.updated_at,
+                document.user_id,
+                document.chunk_count,
             )
 
             # 2. Insert Chunks
@@ -205,7 +210,8 @@ class DocumentRepository:
         """
         Deletes a document. When user_id is provided, only deletes if the document
         belongs to that user (returns RecordNotFoundError otherwise).
-        Associated chunks are removed automatically by ON DELETE CASCADE.
+        For pgvector backend: associated chunks are removed by ON DELETE CASCADE.
+        For Qdrant backend: caller must also invoke VectorStore.delete_by_document().
         """
         try:
             if user_id is not None:
@@ -232,7 +238,7 @@ class DocumentRepository:
         try:
             result = await self.conn.execute(
                 """
-                UPDATE documents 
+                UPDATE documents
                 SET metadata = metadata || $2::jsonb, updated_at = CURRENT_TIMESTAMP
                 WHERE id = $1::uuid
                 """,
@@ -246,3 +252,17 @@ class DocumentRepository:
         except Exception as e:
             logger.error("Failed to update document metadata", document_id=document_id, error=str(e))
             raise DatabaseError(f"Failed to update document metadata: {e}")
+
+
+def _row_to_document(row) -> Document:
+    return Document(
+        id=row["id"],
+        title=row["title"],
+        source=row["source"],
+        mime_type=row.get("mime_type", "application/octet-stream"),
+        metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        chunk_count=row.get("chunk_count") or 0,
+        user_id=row["user_id"],
+    )

@@ -6,6 +6,7 @@ from typing import Optional, List, Any
 
 from neat_rag.config import settings
 from neat_rag.db.pool import PgPool
+from neat_rag.db.vector_store import VectorStoreBase, get_vector_store
 from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.jobs import JobRepository
 from neat_rag.models import Document, Chunk, JobStatus
@@ -22,6 +23,10 @@ class IngestionPipeline:
     """
     Orchestrates: extract → chunk → embed → persist for a single file.
 
+    Document metadata is always saved to PostgreSQL.
+    Chunk vectors are saved via the active VectorStoreBase backend
+    (pgvector or Qdrant, depending on VECTOR_STORE_BACKEND in config).
+
     Job progress updates use a dedicated connection so they are committed
     immediately and survive even if the document insert transaction rolls back.
     """
@@ -30,21 +35,19 @@ class IngestionPipeline:
         self,
         pg_pool: PgPool,
         embedder: Optional[OpenAIEmbedder] = None,
+        vector_store: Optional[VectorStoreBase] = None,
         chunking_strategy: str = "recursive",
         chunker_kwargs: Optional[dict] = None,
     ):
         self.pg_pool = pg_pool
         self.embedder = embedder or get_embedder()
-        
+        self.vector_store = vector_store or get_vector_store()
+
         kwargs = chunker_kwargs or {}
-        # Provide sensible defaults if recursive is used without kwargs
         if chunking_strategy == "recursive" and not kwargs:
             kwargs = {"chunk_size": 1000, "chunk_overlap": 200}
-            
-        self.chunker = get_chunker(
-            strategy=chunking_strategy,
-            **kwargs
-        )
+
+        self.chunker = get_chunker(strategy=chunking_strategy, **kwargs)
 
     async def run(
         self,
@@ -120,10 +123,15 @@ class IngestionPipeline:
                     for i, raw in enumerate(raw_chunks)
                 ]
 
-                # ── Step 5: Persist (atomic transaction) ─────────────────
+                # ── Step 5: Persist ──────────────────────────────────────
+                # 5a. Save chunk vectors via the active backend FIRST.
+                # If this fails, the document won't be visible in the UI (PostgreSQL).
+                await self.vector_store.upsert_chunks(document, chunks)
+
+                # 5b. Save document metadata to PostgreSQL (commits the document).
                 async with self.pg_pool.transaction() as doc_conn:
                     doc_repo = DocumentRepository(doc_conn)
-                    await doc_repo.save_document_and_chunks(document, chunks)
+                    await doc_repo.save_document(document)
 
                 if job_repo and job_id:
                     await job_repo.mark_completed(job_id)

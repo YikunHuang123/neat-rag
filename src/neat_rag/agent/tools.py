@@ -18,6 +18,7 @@ from neat_rag.config import settings
 from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.sessions import SessionRepository
 from neat_rag.db.pool import PgPool
+from neat_rag.db.vector_store import VectorStoreBase
 from neat_rag.exceptions import ToolExecutionError
 from neat_rag.logger import get_logger
 from neat_rag.models import SearchType, Citation
@@ -39,6 +40,7 @@ class AgentContext:
     """Carries per-request dependencies into every tool call."""
     session_id: str
     pg_pool: PgPool
+    vector_store: VectorStoreBase
     vector_retriever: VectorRetriever
     hybrid_retriever: HybridRetriever
     reranker: Optional[CrossEncoderReranker | CohereReranker] = None
@@ -63,7 +65,7 @@ async def hybrid_search(
     Search for relevant information using both semantic and keyword matching.
 
     This is the recommended tool for most questions. It combines vector
-    similarity with PostgreSQL full-text search for the best overall accuracy.
+    similarity with keyword search for the best overall accuracy.
 
     Args:
         query: The search query — a question or keywords to look up.
@@ -99,9 +101,8 @@ async def _run_advanced_search(
     """Internal helper to handle the full retrieval -> rerank -> citation pipeline."""
     try:
         limit = max(1, min(limit, 50))
-        
+
         # 1. Query Rewriting (HyDE / Multi-Query)
-        # Note: In a production tool, we might skip this if the query is very short
         queries = [query]
         if settings.ENABLE_HYDE:
             hyde_query = await hyde_rewrite(query)
@@ -112,7 +113,6 @@ async def _run_advanced_search(
         # 2. Retrieval
         all_results = []
         for q in queries:
-            # Use candidate_k if reranking is enabled to give the reranker more to work with
             k = settings.RETRIEVE_CANDIDATE_K if settings.ENABLE_RERANK else limit
 
             if search_mode == "hybrid":
@@ -132,9 +132,9 @@ async def _run_advanced_search(
         # 4. Rerank
         if settings.ENABLE_RERANK and ctx.deps.reranker and hits:
             hits = await rerank_hits(
-                query=query, 
-                hits=hits, 
-                reranker=ctx.deps.reranker, 
+                query=query,
+                hits=hits,
+                reranker=ctx.deps.reranker,
                 top_k=limit
             )
         else:
@@ -145,9 +145,6 @@ async def _run_advanced_search(
 
         # 5. Citation Formatting
         context_str, citations = build_citation_context(hits)
-        
-        # Store citations in the context so the orchestrator can retrieve them later
-        # We append to avoid losing citations from previous tool calls in the same run
         ctx.deps.citations.extend(citations)
 
         return context_str
@@ -166,7 +163,7 @@ async def get_document(
 
     Use this when you need the full document rather than individual chunks,
     for example when you already know the document_id from a previous search.
-    
+
     CRITICAL: The `document_id` parameter MUST be a valid UUID string (e.g.,
     "123e4567-e89b-12d3-a456-426614174000"). Do NOT pass the document title.
 
@@ -186,16 +183,17 @@ async def get_document(
             doc = await doc_repo.get_document(document_id, user_id=ctx.deps.user_id)
             if doc is None:
                 return f"Document with ID {document_id} not found."
-            
-            chunks = await doc_repo.get_document_chunks(document_id)
-            return {
-                "id": doc.id,
-                "title": doc.title,
-                "source": doc.source,
-                "chunk_count": doc.chunk_count,
-                "content": "\n\n".join(c.content for c in chunks),
-                "created_at": doc.created_at.isoformat(),
-            }
+
+        # Fetch chunks via the active vector store backend
+        chunks = await ctx.deps.vector_store.get_chunks_by_document(document_id)
+        return {
+            "id": doc.id,
+            "title": doc.title,
+            "source": doc.source,
+            "chunk_count": doc.chunk_count,
+            "content": "\n\n".join(c.content for c in chunks),
+            "created_at": doc.created_at.isoformat(),
+        }
     except Exception as e:
         logger.error("get_document tool error", document_id=document_id, error=str(e))
         return f"Error retrieving document: {str(e)}"
@@ -244,4 +242,3 @@ AGENT_TOOLS = [
     get_document,
     list_documents,
 ]
-

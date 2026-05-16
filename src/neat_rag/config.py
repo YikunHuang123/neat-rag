@@ -141,6 +141,16 @@ class Settings(BaseSettings):
     # --- Infrastructure ---
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # --- Vector Store Backend ---
+    # Options: "pgvector" (default, uses PostgreSQL + pgvector extension)
+    #          "qdrant"   (uses Qdrant dedicated vector database)
+    VECTOR_STORE_BACKEND: str = "qdrant"
+
+    # --- Qdrant Configuration (only used when VECTOR_STORE_BACKEND="qdrant") ---
+    QDRANT_HOST: str = "localhost"
+    QDRANT_PORT: int = 6333
+    QDRANT_COLLECTION: str = "chunks"
+
     @field_validator("EMBEDDING_PROVIDER", "CHUNKING_PROVIDER")
     @classmethod
     def validate_providers(cls, v: str) -> str:

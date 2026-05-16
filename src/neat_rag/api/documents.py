@@ -5,7 +5,7 @@ from typing import Optional
 import asyncpg
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 
-from neat_rag.api.deps import get_connection, get_pipeline
+from neat_rag.api.deps import get_connection, get_pipeline, get_store
 from neat_rag.api.middleware import verify_api_key
 from neat_rag.api.schemas import (
     DocumentListResponse,
@@ -17,6 +17,7 @@ from neat_rag.api.schemas import (
 )
 from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.jobs import JobRepository
+from neat_rag.db.vector_store import VectorStoreBase
 from neat_rag.exceptions import RecordNotFoundError
 from neat_rag.ingestion.pipeline import IngestionPipeline
 from neat_rag.logger import get_logger
@@ -111,6 +112,7 @@ async def get_document(
 async def delete_document(
     document_id: str,
     conn: asyncpg.Connection = Depends(get_connection),
+    store: VectorStoreBase = Depends(get_store),
     owner: Optional[str] = Depends(verify_api_key),
 ):
     doc_repo = DocumentRepository(conn)
@@ -118,6 +120,9 @@ async def delete_document(
         await doc_repo.delete_document(document_id, user_id=owner)
     except RecordNotFoundError:
         raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
+    # For pgvector: chunks already removed by ON DELETE CASCADE.
+    # For Qdrant: explicitly remove vectors from the collection.
+    await store.delete_by_document(document_id)
 
 
 @router.patch("/documents/{document_id}", response_model=DocumentResponse)

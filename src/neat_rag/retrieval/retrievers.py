@@ -1,59 +1,23 @@
-import json
 import time
 
-from neat_rag.db.pool import PgPool
+from neat_rag.db.vector_store import VectorStoreBase
 from neat_rag.exceptions import RetrievalError
 from neat_rag.logger import get_logger
-from neat_rag.models import SearchHit, SearchResult, SearchType
+from neat_rag.models import SearchResult, SearchType
 from neat_rag.providers.embedding import OpenAIEmbedder
 
 logger = get_logger(__name__)
 
 
-def _vec_str(embedding: list[float]) -> str:
-    """Format a float list as the pgvector literal '[x,y,z,...]'."""
-    return f"[{','.join(map(str, embedding))}]"
-
-
-def _parse_hits_vector(rows: list) -> list[SearchHit]:
-    return [
-        SearchHit(
-            chunk_id=str(row["chunk_id"]),
-            document_id=str(row["document_id"]),
-            content=row["content"],
-            score=float(row["similarity"]),
-            document_title=row["document_title"],
-            document_source=row["document_source"],
-            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-        )
-        for row in rows
-    ]
-
-
-def _parse_hits_hybrid(rows: list) -> list[SearchHit]:
-    return [
-        SearchHit(
-            chunk_id=str(row["chunk_id"]),
-            document_id=str(row["document_id"]),
-            content=row["content"],
-            score=float(row["combined_score"]),
-            document_title=row["document_title"],
-            document_source=row["document_source"],
-            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-        )
-        for row in rows
-    ]
-
-
 class VectorRetriever:
     """
-    Retrieves chunks via cosine-similarity search using the `match_chunks`
-    PostgreSQL function (backed by an HNSW index on the embedding column).
+    iRetrieves chunks via cosine-similarty search.
+    Delegates to whatever VectorStoreBase backend is configured.
     """
 
-    def __init__(self, embedder: OpenAIEmbedder, pg_pool: PgPool) -> None:
+    def __init__(self, embedder: OpenAIEmbedder, vector_store: VectorStoreBase) -> None:
         self._embedder = embedder
-        self._pg_pool = pg_pool
+        self._store = vector_store
 
     async def search(
         self, query: str, top_k: int = 10, user_id: str | None = None
@@ -61,17 +25,7 @@ class VectorRetriever:
         t0 = time.monotonic()
         try:
             embedding = await self._embedder.embed_one(query)
-            vec = _vec_str(embedding)
-
-            async with self._pg_pool.get_connection() as conn:
-                rows = await conn.fetch(
-                    "SELECT * FROM match_chunks($1::vector, $2, $3)",
-                    vec,
-                    top_k,
-                    user_id,
-                )
-
-            hits = _parse_hits_vector(rows)
+            hits = await self._store.vector_search(embedding, top_k, user_id)
             elapsed = (time.monotonic() - t0) * 1000
             logger.info("Vector search done", query=query[:60], hits=len(hits), ms=round(elapsed, 1))
             return SearchResult(
@@ -89,14 +43,18 @@ class VectorRetriever:
 
 class HybridRetriever:
     """
-    Retrieves chunks via weighted combination of vector similarity and PostgreSQL full-text search, using the `hybrid_search` SQL function.
+    Retrieves chunks via weighted combination of vector similarity and keyword search.
+    Delegates to whatever VectorStoreBase backend is configured.
 
-    The default text_weight=0.3 gives 70 % weight to semantic similarity and 30 % to keyword matching — a good general-purpose balance.
+    For pgvector: uses PostgreSQL FTS + HNSW weighted score (SQL function).
+    For Qdrant:   uses dense + sparse RRF fusion.
+
+    The text_weight parameter is forwarded to backends that support it.
     """
 
-    def __init__(self, embedder: OpenAIEmbedder, pg_pool: PgPool) -> None:
+    def __init__(self, embedder: OpenAIEmbedder, vector_store: VectorStoreBase) -> None:
         self._embedder = embedder
-        self._pg_pool = pg_pool
+        self._store = vector_store
 
     async def search(
         self,
@@ -108,19 +66,7 @@ class HybridRetriever:
         t0 = time.monotonic()
         try:
             embedding = await self._embedder.embed_one(query)
-            vec = _vec_str(embedding)
-
-            async with self._pg_pool.get_connection() as conn:
-                rows = await conn.fetch(
-                    "SELECT * FROM hybrid_search($1::vector, $2::text, $3, $4, $5)",
-                    vec,
-                    query,
-                    top_k,
-                    text_weight,
-                    user_id,
-                )
-
-            hits = _parse_hits_hybrid(rows)
+            hits = await self._store.hybrid_search(embedding, query, top_k, user_id)
             elapsed = (time.monotonic() - t0) * 1000
             logger.info("Hybrid search done", query=query[:60], hits=len(hits), ms=round(elapsed, 1))
             return SearchResult(

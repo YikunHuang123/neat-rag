@@ -1,6 +1,23 @@
 services:
 
-  # ── PostgreSQL + pgvector ──────────────────────────────────────────────────
+  # ── Qdrant vector database ────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: neat-rag-qdrant
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "6334:6334"
+    volumes:
+      - qdrantdata:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── PostgreSQL (supports both metadata and pgvector if needed) ──────────────
   postgres:
     image: pgvector/pgvector:pg17
     container_name: neat-rag-postgres
@@ -50,10 +67,15 @@ services:
       DB_HOST: postgres
       DB_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      VECTOR_STORE_BACKEND: qdrant
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8058/health/live"]
@@ -76,10 +98,15 @@ services:
       DB_HOST: postgres
       DB_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      VECTOR_STORE_BACKEND: qdrant
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      qdrant:
         condition: service_healthy
     restart: unless-stopped
 
@@ -110,3 +137,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  qdrantdata:

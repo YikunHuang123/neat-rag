@@ -13,6 +13,7 @@ from neat_rag.api.middleware import limiter, rate_limit_exceeded_handler
 from neat_rag.api.schemas import ErrorResponse
 from neat_rag.config import settings
 from neat_rag.db.pool import pg_pool
+from neat_rag.db.vector_store import get_vector_store
 from neat_rag.exceptions import NeatRagError, RecordNotFoundError
 from neat_rag.logger import get_logger, setup_logging
 
@@ -23,8 +24,12 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     setup_logging()
     await pg_pool.connect()
-    logger.info("Neat-RAG API started", env=settings.APP_ENV, auth_enabled=settings.ENABLE_AUTH)
+    vector_store = get_vector_store()
+    await vector_store.connect()
+    logger.info("Neat-RAG API started", env=settings.APP_ENV, auth_enabled=settings.ENABLE_AUTH,
+                vector_backend=settings.VECTOR_STORE_BACKEND)
     yield
+    await vector_store.disconnect()
     await pg_pool.disconnect()
     logger.info("Neat-RAG API stopped")
 
