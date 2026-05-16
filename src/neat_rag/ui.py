@@ -296,6 +296,7 @@ _DEFAULTS: Dict[str, Any] = {
     "current_user": None,
     "_redeemed_key": None,
     "_invite_token_result": None,
+    "_auth_mode": None,  # "open" | "auth" | None (not yet detected)
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -320,7 +321,7 @@ def _api(method: str, path: str, silent: bool = False, **kwargs) -> Optional[Dic
                 return {}
             if resp.status_code == 401:
                 if not silent:
-                    st.warning("Authentication required — please enter your API key in Settings.")
+                    st.warning("Authentication required — please enter your API key in the Account section.")
                 return None
             resp.raise_for_status()
             return resp.json()
@@ -328,7 +329,7 @@ def _api(method: str, path: str, silent: bool = False, **kwargs) -> Optional[Dic
         if not silent:
             err_msg = str(exc)
             if "header value" in err_msg.lower():
-                st.error("Admin API Key error — The provided key contains invalid characters or spaces.")
+                st.error("API Key error — the provided key contains invalid characters or spaces.")
             else:
                 st.error(f"API error — {exc}")
         return None
@@ -347,6 +348,22 @@ def _health() -> bool:
     st.session_state.api_online = ok
     st.session_state._health_ts = now
     return ok
+
+
+def _detect_open_mode() -> str:
+    """Detect whether the server runs without authentication. Cached per session."""
+    if st.session_state._auth_mode is not None:
+        return st.session_state._auth_mode
+    if not st.session_state.api_online:
+        return "auth"
+    try:
+        with httpx.Client(timeout=3) as c:
+            r = c.get(st.session_state.api_url.rstrip("/") + "/admin/keys")
+        mode = "open" if r.status_code == 200 else "auth"
+    except Exception:
+        mode = "auth"
+    st.session_state._auth_mode = mode
+    return mode
 
 
 def _refresh_sessions():
@@ -497,11 +514,6 @@ with st.sidebar:
     pill_cls = "nr-online" if online else "nr-offline"
     pill_txt = "Connected" if online else "Offline"
 
-    user_line = ""
-    if st.session_state.api_key:
-        user_display = st.session_state.current_user or "Authenticated"
-        user_line = f'<div style="font-size:.68rem;color:#6b7280;padding:.15rem 0 .5rem">&#128100; {user_display}</div>'
-
     st.markdown(f"""
 <div class="nr-brand">
   <div class="nr-logo">N</div>
@@ -510,14 +522,80 @@ with st.sidebar:
     <div class="nr-tag">Agentic Retrieval</div>
   </div>
 </div>
-{user_line}
 <div style="margin-bottom:.9rem">
   <span class="nr-pill {pill_cls}">
     <span class="nr-pill-dot"></span>{pill_txt}
   </span>
 </div>""", unsafe_allow_html=True)
 
-    # Navigation
+    # ── Account ───────────────────────────────────────────────────────────────
+    st.markdown('<div class="nr-section">Account</div>', unsafe_allow_html=True)
+
+    new_key = st.text_input(
+        "API Key", value=st.session_state.api_key,
+        placeholder="Paste your API key here", type="password", label_visibility="collapsed",
+    )
+    if new_key != st.session_state.api_key:
+        st.session_state.api_key = new_key.strip()
+        st.session_state.sessions = []
+        st.session_state.current_session_id = None
+        st.session_state.messages = []
+        st.session_state.current_user = None
+        st.session_state._sessions_dirty = True
+        st.session_state._redeemed_key = None
+        if st.session_state.nav == "admin" and not new_key:
+            st.session_state.nav = "chat"
+        st.rerun()
+
+    if st.session_state.api_key:
+        # Authenticated — show identity
+        user_display = st.session_state.current_user or "Authenticated"
+        st.caption(f"👤 {user_display}")
+    else:
+        auth_mode = _detect_open_mode()
+        if auth_mode == "open":
+            # Server requires no auth (ENABLE_AUTH=false)
+            st.info("Dev mode — no API key required.", icon="ℹ️")
+        else:
+            # Auth required — surface the invite redemption prominently
+            st.caption("Have an invite code? Exchange it for an API key.")
+            with st.expander("🎟  Redeem invite code", expanded=True):
+                invite_code = st.text_input(
+                    "Invite code", placeholder="Paste your invite code here",
+                    label_visibility="collapsed", key="_invite_input",
+                )
+                if st.button("Get API Key", use_container_width=True, type="primary"):
+                    if not invite_code.strip():
+                        st.warning("Please enter an invite code.")
+                    else:
+                        try:
+                            with httpx.Client(timeout=10) as c:
+                                resp = c.post(
+                                    st.session_state.api_url.rstrip("/") + "/auth/redeem",
+                                    json={"token": invite_code.strip()},
+                                )
+                            if resp.status_code == 201:
+                                data = resp.json()
+                                st.session_state._redeemed_key = data["raw_key"]
+                                st.rerun()
+                            elif resp.status_code == 404:
+                                st.error("Invite code not found.")
+                            elif resp.status_code == 410:
+                                st.error(resp.json().get("detail", "Invite code is no longer valid."))
+                            else:
+                                st.error(f"Error {resp.status_code}: {resp.text}")
+                        except Exception as exc:
+                            st.error(f"Could not reach the API — {exc}")
+
+    # ── Show newly redeemed key ───────────────────────────────────────────────
+    if st.session_state._redeemed_key:
+        st.success("Key issued! Copy it now — it won't be shown again.")
+        st.code(st.session_state._redeemed_key, language=None)
+        if st.button("✓ Saved it", use_container_width=True):
+            st.session_state._redeemed_key = None
+            st.rerun()
+
+    # ── Navigation ────────────────────────────────────────────────────────────
     st.markdown('<div class="nr-section">Navigate</div>', unsafe_allow_html=True)
     nav_cols = st.columns(2)
     with nav_cols[0]:
@@ -537,7 +615,8 @@ with st.sidebar:
             st.session_state.nav = "documents"
             st.rerun()
 
-    if st.session_state.api_key:
+    # Admin is visible to anyone who has a key OR when the server runs in open mode
+    if st.session_state.api_key or _detect_open_mode() == "open":
         if st.button(
             "🔑  Admin",
             use_container_width=True,
@@ -546,7 +625,7 @@ with st.sidebar:
             st.session_state.nav = "admin"
             st.rerun()
 
-    # Session list (chat page only)
+    # ── Sessions (chat page only) ─────────────────────────────────────────────
     if st.session_state.nav == "chat":
         st.markdown('<div class="nr-section">Sessions</div>', unsafe_allow_html=True)
 
@@ -582,97 +661,56 @@ with st.sidebar:
                     _refresh_sessions()
                     st.rerun()
 
-    # Settings
-    st.markdown('<div class="nr-section">Settings</div>', unsafe_allow_html=True)
-
-    new_url = st.text_input(
-        "API URL", value=st.session_state.api_url,
-        placeholder="http://localhost:8058", label_visibility="collapsed",
-    )
-    if new_url != st.session_state.api_url:
-        st.session_state.api_url = new_url.strip()
-        st.session_state._health_ts = 0.0
-        st.rerun()
-
-    new_key = st.text_input(
-        "API Key", value=st.session_state.api_key,
-        placeholder="API key (optional)", type="password", label_visibility="collapsed",
-    )
-    if new_key != st.session_state.api_key:
-        st.session_state.api_key = new_key.strip()
-        # Clear all user-specific state so the new user gets a clean slate
-        st.session_state.sessions = []
-        st.session_state.current_session_id = None
-        st.session_state.messages = []
-        st.session_state.current_user = None
-        st.session_state._sessions_dirty = True
-        st.session_state._redeemed_key = None
-        if st.session_state.nav == "admin" and not new_key:
-            st.session_state.nav = "chat"
-        st.rerun()
-
-    # ── Show newly redeemed key if present ───────────────────────────────────
-    if st.session_state._redeemed_key:
-        st.success("Key issued! Copy it now — it won't be shown again.")
-        st.code(st.session_state._redeemed_key, language=None)
-        if st.button("✓ Saved it", use_container_width=True):
-            st.session_state._redeemed_key = None
-            st.rerun()
-
-    # ── Redeem invite code (shown when no key is configured) ─────────────────
-    if not st.session_state.api_key:
-        with st.expander("🎟  Redeem invite code", expanded=False):
-            invite_code = st.text_input(
-                "Invite code", placeholder="Paste your invite code here",
-                label_visibility="collapsed", key="_invite_input",
-            )
-            if st.button("Get API Key", use_container_width=True, type="primary"):
-                if not invite_code.strip():
-                    st.warning("Please enter an invite code.")
-                else:
-                    try:
-                        with httpx.Client(timeout=10) as c:
-                            resp = c.post(
-                                st.session_state.api_url.rstrip("/") + "/auth/redeem",
-                                json={"token": invite_code.strip()},
-                            )
-                        if resp.status_code == 201:
-                            data = resp.json()
-                            st.session_state._redeemed_key = data["raw_key"]
-                            st.rerun()
-                        elif resp.status_code == 404:
-                            st.error("Invite code not found.")
-                        elif resp.status_code == 410:
-                            st.error(resp.json().get("detail", "Invite code is no longer valid."))
-                        else:
-                            st.error(f"Error {resp.status_code}: {resp.text}")
-                    except Exception as exc:
-                        st.error(f"Could not reach the API — {exc}")
-
+    # ── Preferences ───────────────────────────────────────────────────────────
+    st.markdown('<div class="nr-section">Preferences</div>', unsafe_allow_html=True)
     st.session_state.search_type = st.selectbox(
         "Search mode",
         options=["hybrid", "vector"],
         index=0 if st.session_state.search_type == "hybrid" else 1,
     )
 
-    if st.button("⟳  Refresh status", use_container_width=True):
-        st.session_state._health_ts = 0.0
-        st.session_state._sessions_dirty = True
-        st.rerun()
+    # ── Connection ────────────────────────────────────────────────────────────
+    with st.expander("Connection", expanded=False):
+        new_url = st.text_input(
+            "API URL", value=st.session_state.api_url,
+            placeholder="http://localhost:8058", label_visibility="collapsed",
+        )
+        if new_url != st.session_state.api_url:
+            st.session_state.api_url = new_url.strip()
+            st.session_state._health_ts = 0.0
+            st.session_state._auth_mode = None
+            st.rerun()
+
+        if st.button("⟳  Refresh status", use_container_width=True):
+            st.session_state._health_ts = 0.0
+            st.session_state._sessions_dirty = True
+            st.session_state._auth_mode = None
+            st.rerun()
 
 
 # ── Chat page ─────────────────────────────────────────────────────────────────
 if st.session_state.nav == "chat":
     sid = st.session_state.current_session_id
 
-    if sid is None:
+    if not st.session_state.api_key and _detect_open_mode() == "auth":
+        # Not authenticated and server requires auth → show onboarding
+        st.markdown("## Welcome to Neat-RAG")
+        st.markdown("""
+Get started in three steps:
+
+1. **Get an invite code** from your administrator
+2. **Redeem it** in the sidebar → you'll receive your personal API key
+3. **Paste the key** in the Account section above and start chatting
+""")
+        st.info("Already have an API key? Paste it in the **Account** section of the sidebar.")
+    elif sid is None:
         st.markdown("## Chat")
         st.info("Create or select a session in the sidebar to start chatting.")
     else:
         # Resolve title
         current_sess = next((s for s in st.session_state.sessions if s["id"] == sid), None)
         title = current_sess["title"] if current_sess else "Chat"
-        
+
         st.markdown(f"## {title}")
         st.caption(f"Session `{sid[:8]}…`  ·  mode: **{st.session_state.search_type}**")
         st.divider()
@@ -723,7 +761,7 @@ if st.session_state.nav == "chat":
                     if s["id"] == sid:
                         s["title"] = result["title"]
                         break
-            
+
             st.rerun()
 
 
@@ -834,7 +872,6 @@ elif st.session_state.nav == "documents":
 
                     jrow, jprog = st.columns([3, 2])
                     with jrow:
-                        # Fixed string literal safety
                         st.markdown(f"""
 <div class="nr-job">
   <span class="nr-job-s nr-{status}">{status.upper()}</span>
@@ -851,6 +888,24 @@ elif st.session_state.nav == "documents":
 # ── Admin page ────────────────────────────────────────────────────────────────
 elif st.session_state.nav == "admin":
     st.markdown("## Admin")
+
+    # Verify admin access before rendering any admin UI
+    _access_test = _api("get", "/admin/keys", silent=True)
+    if _access_test is None:
+        if not st.session_state.api_online:
+            st.error("Cannot connect to the API — check the Connection settings in the sidebar.")
+        else:
+            st.error("Admin access denied — your API key does not have admin privileges.")
+            st.info(
+                "If you are the system owner, bootstrap your first admin key via the CLI:\n\n"
+                "```bash\n"
+                "curl -X POST http://localhost:8058/admin/keys \\\n"
+                "  -H 'Content-Type: application/json' \\\n"
+                "  -d '{\"owner\": \"admin\"}'\n"
+                "```\n\n"
+                "Then paste the returned key in the **Account** section of the sidebar."
+            )
+        st.stop()
 
     tab_gen, tab_invites, tab_keys = st.tabs(["Generate Invite", "Invites", "API Keys"])
 
