@@ -90,7 +90,7 @@ class SessionRepository:
             params.append(user_id)
             query += f" WHERE user_id = ${len(params)}"
 
-        query += " ORDER BY updated_at DESC"
+        query += " ORDER BY created_at DESC"
         params.append(limit)
         query += f" LIMIT ${len(params)}"
         params.append(offset)

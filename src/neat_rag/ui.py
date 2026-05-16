@@ -122,6 +122,26 @@ header { background-color: transparent !important; }
 .stButton > button {
     border-radius: 8px !important; font-weight: 600 !important; transition: all .18s !important;
 }
+
+/* Fix for centering icons (Emoji) in small buttons, especially in sidebar */
+[data-testid="stSidebar"] .stButton button {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    height: 30px !important;
+    min-width: 30px !important; /* Smaller square */
+    width: 100% !important;
+    font-size: 0.85rem !important; /* Smaller icon font */
+}
+[data-testid="stSidebar"] .stButton button p {
+    margin: 0 !important;
+    line-height: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
 /* Active session button (disabled state in sidebar) */
 section[data-testid="stSidebar"] .stButton > button:disabled {
     background-color: rgba(96, 165, 250, 0.15) !important;
@@ -321,6 +341,7 @@ _DEFAULTS: Dict[str, Any] = {
     "llm_model_inp": "",
     "llm_api_key_inp": "",
     "llm_base_url_inp": "",
+    "editing_session_id": None,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -542,6 +563,17 @@ def _render_feedback(message_id: Optional[str], key_suffix: str):
             st.toast("Feedback noted.")
 
 
+def _on_rename_submit(sid: str):
+    """Callback for renaming a session via text_input (on_change)."""
+    val_key = f"edit_val_{sid}"
+    if val_key in st.session_state:
+        new_title = st.session_state[val_key].strip()
+        if new_title:
+            _api("patch", f"/sessions/{sid}", json={"title": new_title})
+            _refresh_sessions()
+    st.session_state.editing_session_id = None
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     online = _health()
@@ -676,24 +708,58 @@ with st.sidebar:
 
         for s in st.session_state.sessions:
             is_active = (s["id"] == st.session_state.current_session_id)
-            sc, dc = st.columns([5, 1])
-            with sc:
-                raw_t = s["title"]
-                # Sidebar truncation: 18 chars
-                short_t = raw_t if len(raw_t) <= 18 else raw_t[:17] + "…"
-                label = f"▸ {short_t}" if is_active else short_t
-                if st.button(label, key=f"s_{s['id']}", use_container_width=True, disabled=is_active):
-                    st.session_state.current_session_id = s["id"]
-                    _load_history(s["id"])
-                    st.rerun()
-            with dc:
-                if st.button("✕", key=f"ds_{s['id']}", help="Delete"):
-                    _delete_session(s["id"])
-                    if st.session_state.current_session_id == s["id"]:
-                        st.session_state.current_session_id = None
-                        st.session_state.messages = []
-                    _refresh_sessions()
-                    st.rerun()
+            is_editing = (s["id"] == st.session_state.editing_session_id)
+
+            if is_editing:
+                ec, bc1, bc2 = st.columns([10, 1, 1])
+                with ec:
+                    st.text_input(
+                        "Rename", value=s["title"], key=f"edit_val_{s['id']}",
+                        label_visibility="collapsed",
+                        on_change=_on_rename_submit,
+                        args=(s["id"],)
+                    )
+                with bc1:
+                    if st.button("💾", key=f"save_{s['id']}", help="Save"):
+                        _on_rename_submit(s["id"])
+                        st.rerun()
+                with bc2:
+                    if st.button("🚫", key=f"can_{s['id']}", help="Cancel"):
+                        st.session_state.editing_session_id = None
+                        st.rerun()
+            else:
+                sc, rc, dc = st.columns([10, 1, 1])
+                with sc:
+                    raw_t = s["title"]
+                    # Sidebar truncation: 20 chars
+                    short_t = raw_t if len(raw_t) <= 20 else raw_t[:19] + "…"
+                    label = f"▸ {short_t}" if is_active else short_t
+                    
+                    # Wrap title button to allow both selection and renaming
+                    # (In Streamlit, we can't easily detect double-click, 
+                    # so we keep the selection as is but let the pencil be the main trigger,
+                    # or allow selection first, then if already active, clicking again renames)
+                    if st.button(label, key=f"s_{s['id']}", use_container_width=True, disabled=is_editing):
+                        if is_active:
+                            # If already selected, clicking again triggers rename
+                            st.session_state.editing_session_id = s["id"]
+                            st.rerun()
+                        else:
+                            st.session_state.current_session_id = s["id"]
+                            _load_history(s["id"])
+                            st.rerun()
+                with rc:
+                    if st.button("✏️", key=f"ren_{s['id']}", help="Rename"):
+                        st.session_state.editing_session_id = s["id"]
+                        st.rerun()
+                with dc:
+                    if st.button("✕", key=f"ds_{s['id']}", help="Delete"):
+                        _delete_session(s["id"])
+                        if st.session_state.current_session_id == s["id"]:
+                            st.session_state.current_session_id = None
+                            st.session_state.messages = []
+                        _refresh_sessions()
+                        st.rerun()
 
     # ── Preferences ───────────────────────────────────────────────────────────
     st.markdown('<div class="nr-section">Preferences</div>', unsafe_allow_html=True)
