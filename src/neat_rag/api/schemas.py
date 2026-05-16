@@ -104,6 +104,7 @@ class SessionResponse(BaseModel):
 
 class SessionListResponse(BaseModel):
     items: List[SessionResponse]
+    total: int
 
 
 class MessageResponse(BaseModel):

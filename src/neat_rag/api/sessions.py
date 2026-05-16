@@ -44,7 +44,8 @@ async def list_sessions(
     # When authenticated, always scope to the token owner regardless of query param
     effective_user_id = owner if owner is not None else user_id
     sessions = await repo.list_sessions(user_id=effective_user_id, limit=limit, offset=offset)
-    return SessionListResponse(items=[_to_session_response(s) for s in sessions])
+    total = await repo.count_sessions(user_id=effective_user_id)
+    return SessionListResponse(items=[_to_session_response(s) for s in sessions], total=total)
 
 
 @router.get("/{session_id}", response_model=SessionResponse)

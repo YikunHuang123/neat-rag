@@ -336,6 +336,9 @@ _DEFAULTS: Dict[str, Any] = {
     "_redeemed_key": None,
     "_invite_token_result": None,
     "_auth_mode": None,  # "open" | "auth" | None (not yet detected)
+    "session_page": 1,
+    "session_page_size": 10,
+    "session_total": 0,
     # LLM model override (set from the Model picker in the sidebar)
     "llm_provider": "server",   # "server" = use server's configured LLM
     "llm_model_inp": "",
@@ -412,8 +415,16 @@ def _detect_open_mode() -> str:
 
 
 def _refresh_sessions():
-    data = _api("get", "/sessions?limit=50", silent=True)
-    st.session_state.sessions = data.get("items", []) if data else []
+    size = st.session_state.session_page_size
+    offset = (st.session_state.session_page - 1) * size
+    data = _api("get", f"/sessions?limit={size}&offset={offset}", silent=True)
+    if data:
+        st.session_state.sessions = data.get("items", [])
+        st.session_state.session_total = data.get("total", 0)
+    else:
+        st.session_state.sessions = []
+        st.session_state.session_total = 0
+    
     if st.session_state.sessions and not st.session_state.current_user:
         st.session_state.current_user = st.session_state.sessions[0].get("user_id")
     st.session_state._sessions_dirty = False
@@ -423,6 +434,7 @@ def _create_session(title: str = "New Chat") -> Optional[Dict]:
     sess = _api("post", "/sessions", json={"title": title})
     if sess:
         st.session_state._sessions_dirty = True
+        st.session_state.session_page = 1  # Reset to page 1 to see new session
         if not st.session_state.current_user and sess.get("user_id"):
             st.session_state.current_user = sess["user_id"]
     return sess
@@ -607,6 +619,7 @@ with st.sidebar:
         st.session_state.current_session_id = None
         st.session_state.messages = []
         st.session_state.current_user = None
+        st.session_state.session_page = 1
         st.session_state._sessions_dirty = True
         st.session_state._redeemed_key = None
         if st.session_state.nav == "admin" and not new_key:
@@ -758,8 +771,35 @@ with st.sidebar:
                         if st.session_state.current_session_id == s["id"]:
                             st.session_state.current_session_id = None
                             st.session_state.messages = []
-                        _refresh_sessions()
+                        
+                        # If we deleted the last item on the page, go back one page
+                        if len(st.session_state.sessions) <= 1 and st.session_state.session_page > 1:
+                            st.session_state.session_page -= 1
+                        
+                        st.session_state._sessions_dirty = True
                         st.rerun()
+
+        # ── Pagination Controls ──
+        total_p = (st.session_state.session_total + st.session_state.session_page_size - 1) // st.session_state.session_page_size
+        if total_p > 1:
+            st.markdown('<div style="margin-top: 0.8rem;"></div>', unsafe_allow_html=True)
+            pcol1, pcol2, pcol3 = st.columns([1, 2, 1])
+            with pcol1:
+                if st.button("◀", key="prev_page", disabled=st.session_state.session_page <= 1, use_container_width=True):
+                    st.session_state.session_page -= 1
+                    st.session_state._sessions_dirty = True
+                    st.rerun()
+            with pcol2:
+                st.markdown(
+                    f"<div style='text-align:center; font-size:0.75rem; color:#6b7280; line-height:30px;'>"
+                    f"{st.session_state.session_page} / {total_p}</div>",
+                    unsafe_allow_html=True
+                )
+            with pcol3:
+                if st.button("▶", key="next_page", disabled=st.session_state.session_page >= total_p, use_container_width=True):
+                    st.session_state.session_page += 1
+                    st.session_state._sessions_dirty = True
+                    st.rerun()
 
     # ── Preferences ───────────────────────────────────────────────────────────
     st.markdown('<div class="nr-section">Preferences</div>', unsafe_allow_html=True)
@@ -841,12 +881,15 @@ with st.sidebar:
         )
         if new_url != st.session_state.api_url:
             st.session_state.api_url = new_url.strip()
+            st.session_state.session_page = 1
+            st.session_state._sessions_dirty = True
             st.session_state._health_ts = 0.0
             st.session_state._auth_mode = None
             st.rerun()
 
         if st.button("⟳  Refresh status", use_container_width=True):
             st.session_state._health_ts = 0.0
+            st.session_state.session_page = 1
             st.session_state._sessions_dirty = True
             st.session_state._auth_mode = None
             st.rerun()

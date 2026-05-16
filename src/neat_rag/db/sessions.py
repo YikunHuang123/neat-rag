@@ -112,6 +112,21 @@ class SessionRepository:
             logger.error("Failed to list sessions", user_id=user_id, error=str(e))
             raise DatabaseError(f"Failed to list sessions: {e}")
 
+    async def count_sessions(self, user_id: Optional[str] = None) -> int:
+        """Return the total number of sessions, optionally filtered by user_id."""
+        query = "SELECT COUNT(*) FROM sessions"
+        params = []
+        if user_id is not None:
+            query += " WHERE user_id = $1"
+            params.append(user_id)
+        
+        try:
+            val = await self.conn.fetchval(query, *params)
+            return int(val or 0)
+        except Exception as e:
+            logger.error("Failed to count sessions", user_id=user_id, error=str(e))
+            raise DatabaseError(f"Failed to count sessions: {e}")
+
     async def update_session_title(self, session_id: str, title: str, user_id: Optional[str] = None) -> None:
         """Update the title of a session."""
         try:
