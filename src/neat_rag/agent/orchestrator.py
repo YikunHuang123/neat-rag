@@ -105,6 +105,15 @@ def build_agent_context(
     )
 
 
+def _inject_language_directive(question: str) -> str:
+    """
+    Prepend a language directive to reinforce that the model must reply in the
+    same language as the question — needed for weaker local models (e.g. llama3.1)
+    that ignore system-prompt instructions when RAG context is in another language.
+    """
+    return f"[IMPORTANT: Respond in the same language as this question, regardless of the language of the retrieved context.]\n{question}"
+
+
 async def run_query(
     question: str,
     session_id: str,
@@ -136,6 +145,11 @@ async def run_query(
 
     # Sanitize question to remove potential Unicode surrogates that cause encoding errors
     question = question.encode("utf-8", "ignore").decode("utf-8")
+    original_question = question
+
+    # Prepend explicit language directive so weak local models don't default to a language
+    # when retrieved RAG context is in a different language.
+    question = _inject_language_directive(question)
 
     ctx = build_agent_context(session_id, user_id, search_type=search_type)
 
@@ -160,7 +174,7 @@ async def run_query(
     # Persist both sides of the exchange in the session
     async with pg_pool.get_connection() as conn:
         session_repo = SessionRepository(conn)
-        await session_repo.add_message(session_id, MessageRole.USER, question)
+        await session_repo.add_message(session_id, MessageRole.USER, original_question)
         await session_repo.add_message(session_id, MessageRole.AGENT, answer)
 
     logger.info(

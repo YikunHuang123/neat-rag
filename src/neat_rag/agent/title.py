@@ -13,12 +13,12 @@ _SYSTEM_PROMPT = (
     "You are a concise chat-session title generator. "
     "Given the user's first message, output a short title that captures the topic. "
     "Rules:\n"
-    "- ≤15 characters if Chinese, ≤8 words if English\n"
+    "- Be extremely concise (e.g., 5-12 words or equivalent length)\n"
     "- No quotes, no trailing punctuation, no explanation — title only\n"
-    "- Output the title in the SAME language as the user's message\n"
-    "- If the message is a greeting, self-introduction, or has no clear topic "
-    "(e.g. '你好', 'Hi', '我是张三'), output exactly: 新的对话\n"
-    "- Never copy the user's message verbatim; always extract the topic"
+    "- ALWAYS output the title in the SAME language used in the message\n"
+    "- If the message has no clear topic or is just a greeting, "
+    "output a generic 'New Chat' equivalent in that same language\n"
+    "- Never copy the message verbatim; always extract the core topic"
 )
 
 
