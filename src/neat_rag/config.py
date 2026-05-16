@@ -63,7 +63,12 @@ class Settings(BaseSettings):
     #   gemini    : gemini-2.5-pro, gemini-2.5-flash
     #   anthropic : claude-3-7-sonnet-latest, claude-3-5-haiku-latest
     #   deepseek  : deepseek-chat, deepseek-reasoner
-    #   ollama    : llama3, qwen2.5
+    #   ollama    : qwen2.5, llama3
+    #
+    # [WARNING] Llama 3.1 (8B) Note:
+    # This model has known "Tool Calling" stability issues in multi-language contexts (e.g., Chinese).
+    # It may output gibberish/random characters when generating JSON parameters for tools.
+    # For local OLLAMA usage, QWEN 2.5 is STRONGLY RECOMMENDED over Llama 3.1 for RAG tasks.
     LLM_PROVIDER: str = "deepseek"
     LLM_MODEL: str = "deepseek-chat"
 
