@@ -112,18 +112,30 @@ class SessionRepository:
             logger.error("Failed to list sessions", user_id=user_id, error=str(e))
             raise DatabaseError(f"Failed to list sessions: {e}")
 
-    async def update_session_title(self, session_id: str, title: str) -> None:
+    async def update_session_title(self, session_id: str, title: str, user_id: Optional[str] = None) -> None:
         """Update the title of a session."""
         try:
-            result = await self.conn.execute(
-                """
-                UPDATE sessions
-                SET title = $2, updated_at = CURRENT_TIMESTAMP
-                WHERE id = $1::uuid
-                """,
-                session_id,
-                title,
-            )
+            if user_id is not None:
+                result = await self.conn.execute(
+                    """
+                    UPDATE sessions
+                    SET title = $2, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $1::uuid AND user_id = $3
+                    """,
+                    session_id,
+                    title,
+                    user_id,
+                )
+            else:
+                result = await self.conn.execute(
+                    """
+                    UPDATE sessions
+                    SET title = $2, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = $1::uuid
+                    """,
+                    session_id,
+                    title,
+                )
             if result == "UPDATE 0":
                 raise RecordNotFoundError(f"Session with ID {session_id} not found.")
         except RecordNotFoundError:
@@ -132,15 +144,23 @@ class SessionRepository:
             logger.error("Failed to update session title", session_id=session_id, error=str(e))
             raise DatabaseError(f"Failed to update session title: {e}")
 
-    async def delete_session(self, session_id: str) -> None:
+    async def delete_session(self, session_id: str, user_id: Optional[str] = None) -> None:
         """
         Delete a session.
         Associated messages are removed automatically by ON DELETE CASCADE.
         """
         try:
-            result = await self.conn.execute(
-                "DELETE FROM sessions WHERE id = $1::uuid", session_id
-            )
+            if user_id is not None:
+                result = await self.conn.execute(
+                    "DELETE FROM sessions WHERE id = $1::uuid AND user_id = $2", 
+                    session_id, 
+                    user_id
+                )
+            else:
+                result = await self.conn.execute(
+                    "DELETE FROM sessions WHERE id = $1::uuid", 
+                    session_id
+                )
             if result == "DELETE 0":
                 raise RecordNotFoundError(f"Session with ID {session_id} not found.")
             logger.info("Deleted session", session_id=session_id)
