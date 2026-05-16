@@ -198,5 +198,3 @@ def _to_job_response(j: Job) -> JobResponse:
         created_at=j.created_at,
         updated_at=j.updated_at,
     )
-at,
-    )

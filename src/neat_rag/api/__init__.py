@@ -94,6 +94,7 @@ def create_app() -> FastAPI:
     from neat_rag.api.health import router as health_router
     from neat_rag.api.sessions import router as sessions_router
     from neat_rag.api.admin import router as admin_router
+    from neat_rag.api.auth import router as auth_router
 
     app.include_router(health_router)
     app.include_router(documents_router)
@@ -102,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(sessions_router)
     app.include_router(feedback_router)
     app.include_router(admin_router)
+    app.include_router(auth_router)
 
     return app
 

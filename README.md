@@ -15,6 +15,7 @@ A production-ready Retrieval-Augmented Generation (RAG) system built with Pydant
 - [Directory Structure](#directory-structure)
 - [Tech Stack](#tech-stack)
 - [Development Phases](#development-phases)
+- [Self-Service API Key Issuance](#self-service-api-key-issuance)
 - [Development & Testing](#development--testing)
 
 ---
@@ -32,7 +33,8 @@ A production-ready Retrieval-Augmented Generation (RAG) system built with Pydant
 - **Streaming Responses** — Server-Sent Events (SSE) for real-time output
 - **Background Ingestion** — Async job queue with progress tracking via Redis + arq
 - **API Key Auth** — Optional authentication with scoped keys and rate limiting
-- **Web UI** — Interactive Streamlit interface for chat, document management, and feedback
+- **Self-Service Key Issuance** — Invite-token flow: admin generates a one-time code, user redeems it in the UI to receive their own API key — no account management system required
+- **Web UI** — Interactive Streamlit interface for chat, document management, feedback, and invite management
 - **Evaluation** — Built-in RAGAS metrics for retrieval and generation quality
 
 ---
@@ -42,7 +44,7 @@ A production-ready Retrieval-Augmented Generation (RAG) system built with Pydant
 ```
 ┌─────────────┐     ┌──────────────────────────────────────────────────┐
 │  Streamlit  │────▶│                   FastAPI                         │
-│    UI       │     │  /chat  /documents  /sessions  /jobs  /admin      │
+│    UI       │     │  /chat  /documents  /sessions  /jobs  /admin  /auth│
 └─────────────┘     └───────────────┬──────────────────────────────────┘
                                     │
                     ┌───────────────▼───────────────┐
@@ -342,6 +344,33 @@ Full interactive documentation is available at `http://localhost:8058/docs`.
 | `POST` | `/admin/keys` | Create API key |
 | `GET` | `/admin/keys` | List API keys |
 | `DELETE` | `/admin/keys/{id}` | Revoke API key |
+| `POST` | `/admin/invites` | Generate a one-time invite token |
+| `GET` | `/admin/invites` | List all invite tokens |
+| `DELETE` | `/admin/invites/{id}` | Revoke an invite token |
+
+**Create invite request body:**
+```json
+{
+  "owner": "alice",
+  "expires_in_days": 7
+}
+```
+
+### Auth
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/auth/redeem` | Exchange an invite token for a new API key (public, no auth required) |
+
+**Redeem request body:**
+```json
+{ "token": "abc123..." }
+```
+
+**Response** (raw key shown once, never stored):
+```json
+{ "owner": "alice", "raw_key": "nrag_..." }
+```
 
 ### Health
 
@@ -393,7 +422,8 @@ neat_rag/
 │   │   ├── sessions.py         # Session & message CRUD
 │   │   ├── jobs.py             # Ingestion job tracking
 │   │   ├── feedback.py         # User feedback CRUD
-│   │   └── api_keys.py         # API key management
+│   │   ├── api_keys.py         # API key management
+│   │   └── invites.py          # Invite token CRUD
 │   │
 │   └── api/                    # FastAPI application
 │       ├── __init__.py         # App factory
@@ -405,12 +435,14 @@ neat_rag/
 │       ├── chat.py             # Chat routes (blocking & streaming)
 │       ├── sessions.py         # Session routes
 │       ├── feedback.py         # Feedback routes
-│       └── admin.py            # Admin routes
+│       ├── admin.py            # Admin routes (keys + invites)
+│       └── auth.py             # Public auth routes (redeem invite)
 │
 ├── migrations/                 # Alembic migrations
 │   ├── env.py
 │   ├── versions/
-│   │   └── 001_initial_schema.py   # Tables, HNSW index, FTS
+│   │   ├── 001_initial_schema.py   # Tables, HNSW index, FTS
+│   │   └── 002_invite_tokens.py    # invite_tokens table
 │   └── script.py.mako
 │
 ├── docker/
@@ -594,13 +626,43 @@ Phase 5 ──▶ Phase 6 ──▶ Phase 7 ──▶ Phase 8
 
 **UI highlights vs. a plain Streamlit app:**
 
-| Before | After |
-|---|---|
-| No session management | Full session sidebar — create, switch, delete |
-| No document management | Document Library tab + upload + job progress monitor |
-| No citations | Collapsible **Sources** expander per AI reply |
-| No feedback | Thumbs up / down per message → `POST /feedback` |
-| Manual async for streaming | `st.write_stream()` with SSE generator |
+---
+
+## Self-Service API Key Issuance
+
+Users can obtain their own API keys through an invite-token flow — no account management system or email service required.
+
+### How it works
+
+| Step | Who | Action |
+|------|-----|--------|
+| 1 | Admin | Opens the **Admin** panel in the UI (or calls `POST /admin/invites`) → generates a one-time token with an owner name and expiry |
+| 2 | Admin | Shares the token with the user via any channel (Slack, email, etc.) |
+| 3 | User | Opens the UI → expands **Redeem invite code** in the Settings sidebar → pastes the token → clicks **Get API Key** |
+| 4 | System | Validates the token, issues a new API key, invalidates the token immediately |
+| 5 | User | Copies the key (shown once), pastes it into the **API Key** field — done |
+
+### Bootstrapping your first admin key
+
+When `ENABLE_AUTH=false` (the development default), the `/admin/*` endpoints require no authentication. Create your first key with:
+
+```bash
+curl -X POST http://localhost:8058/admin/keys \
+  -H "Content-Type: application/json" \
+  -d '{"owner": "admin"}'
+# → { "raw_key": "nrag_...", ... }  — save this, it won't be shown again
+```
+
+Then set `ENABLE_AUTH=true` in `.env` before going to production.
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `db/invites.py` | `InviteTokenRepository` — create, lookup, mark used, delete, list |
+| `api/auth.py` | `POST /auth/redeem` — public endpoint, no auth required |
+| `api/admin.py` | Extended with `POST/GET/DELETE /admin/invites` |
+| `migrations/002_invite_tokens.py` | Adds the `invite_tokens` table |
 
 ---
 

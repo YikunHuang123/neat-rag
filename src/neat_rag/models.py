@@ -98,6 +98,16 @@ class ApiKey(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_used_at: Optional[datetime] = None
 
+class InviteToken(BaseModel):
+    """One-time invite token that a user redeems to receive an API key."""
+    id: str
+    token: str
+    owner: str
+    used: bool = False
+    used_at: Optional[datetime] = None
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # --- Internal Retrieval & Processing Models ---
 
 class SearchHit(BaseModel):

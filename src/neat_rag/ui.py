@@ -294,6 +294,8 @@ _DEFAULTS: Dict[str, Any] = {
     "_health_ts": 0.0,
     "_sessions_dirty": True,
     "current_user": None,
+    "_redeemed_key": None,
+    "_invite_token_result": None,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -324,7 +326,11 @@ def _api(method: str, path: str, silent: bool = False, **kwargs) -> Optional[Dic
             return resp.json()
     except Exception as exc:
         if not silent:
-            st.error(f"API error — {exc}")
+            err_msg = str(exc)
+            if "header value" in err_msg.lower():
+                st.error("Admin API Key error — The provided key contains invalid characters or spaces.")
+            else:
+                st.error(f"API error — {exc}")
         return None
 
 
@@ -531,6 +537,15 @@ with st.sidebar:
             st.session_state.nav = "documents"
             st.rerun()
 
+    if st.session_state.api_key:
+        if st.button(
+            "🔑  Admin",
+            use_container_width=True,
+            type="primary" if st.session_state.nav == "admin" else "secondary",
+        ):
+            st.session_state.nav = "admin"
+            st.rerun()
+
     # Session list (chat page only)
     if st.session_state.nav == "chat":
         st.markdown('<div class="nr-section">Sessions</div>', unsafe_allow_html=True)
@@ -575,7 +590,7 @@ with st.sidebar:
         placeholder="http://localhost:8058", label_visibility="collapsed",
     )
     if new_url != st.session_state.api_url:
-        st.session_state.api_url = new_url
+        st.session_state.api_url = new_url.strip()
         st.session_state._health_ts = 0.0
         st.rerun()
 
@@ -584,14 +599,55 @@ with st.sidebar:
         placeholder="API key (optional)", type="password", label_visibility="collapsed",
     )
     if new_key != st.session_state.api_key:
-        st.session_state.api_key = new_key
+        st.session_state.api_key = new_key.strip()
         # Clear all user-specific state so the new user gets a clean slate
         st.session_state.sessions = []
         st.session_state.current_session_id = None
         st.session_state.messages = []
         st.session_state.current_user = None
         st.session_state._sessions_dirty = True
+        st.session_state._redeemed_key = None
+        if st.session_state.nav == "admin" and not new_key:
+            st.session_state.nav = "chat"
         st.rerun()
+
+    # ── Show newly redeemed key if present ───────────────────────────────────
+    if st.session_state._redeemed_key:
+        st.success("Key issued! Copy it now — it won't be shown again.")
+        st.code(st.session_state._redeemed_key, language=None)
+        if st.button("✓ Saved it", use_container_width=True):
+            st.session_state._redeemed_key = None
+            st.rerun()
+
+    # ── Redeem invite code (shown when no key is configured) ─────────────────
+    if not st.session_state.api_key:
+        with st.expander("🎟  Redeem invite code", expanded=False):
+            invite_code = st.text_input(
+                "Invite code", placeholder="Paste your invite code here",
+                label_visibility="collapsed", key="_invite_input",
+            )
+            if st.button("Get API Key", use_container_width=True, type="primary"):
+                if not invite_code.strip():
+                    st.warning("Please enter an invite code.")
+                else:
+                    try:
+                        with httpx.Client(timeout=10) as c:
+                            resp = c.post(
+                                st.session_state.api_url.rstrip("/") + "/auth/redeem",
+                                json={"token": invite_code.strip()},
+                            )
+                        if resp.status_code == 201:
+                            data = resp.json()
+                            st.session_state._redeemed_key = data["raw_key"]
+                            st.rerun()
+                        elif resp.status_code == 404:
+                            st.error("Invite code not found.")
+                        elif resp.status_code == 410:
+                            st.error(resp.json().get("detail", "Invite code is no longer valid."))
+                        else:
+                            st.error(f"Error {resp.status_code}: {resp.text}")
+                    except Exception as exc:
+                        st.error(f"Could not reach the API — {exc}")
 
     st.session_state.search_type = st.selectbox(
         "Search mode",
@@ -790,3 +846,106 @@ elif st.session_state.nav == "documents":
                             st.progress(min(progress, 1.0))
                         if job.get("error"):
                             st.caption(f":red[{job['error']}]")
+
+
+# ── Admin page ────────────────────────────────────────────────────────────────
+elif st.session_state.nav == "admin":
+    st.markdown("## Admin")
+
+    tab_gen, tab_invites, tab_keys = st.tabs(["Generate Invite", "Invites", "API Keys"])
+
+    # ── Generate invite tab ───────────────────────────────────────────────────
+    with tab_gen:
+        st.markdown("Create a one-time invite code to give a user access.")
+        owner_input = st.text_input("Owner name", placeholder="e.g. alice or team_a", key="inv_owner")
+        expiry_days = st.slider("Expires in (days)", min_value=1, max_value=30, value=7)
+
+        if st.button("Generate invite code", type="primary"):
+            if not owner_input.strip():
+                st.warning("Please enter an owner name.")
+            else:
+                result = _api(
+                    "post", "/admin/invites",
+                    json={"owner": owner_input.strip(), "expires_in_days": expiry_days},
+                )
+                if result:
+                    st.session_state._invite_token_result = result
+                    st.rerun()
+
+        if st.session_state._invite_token_result:
+            inv = st.session_state._invite_token_result
+            st.success(f"Invite created for **{inv['owner']}** — expires {inv['expires_at'][:10]}")
+            st.markdown("**Share this code with the user:**")
+            st.code(inv["token"], language=None)
+            if st.button("✓ Done", key="inv_done"):
+                st.session_state._invite_token_result = None
+                st.rerun()
+
+    # ── Invites list tab ──────────────────────────────────────────────────────
+    with tab_invites:
+        icol, ricol = st.columns([5, 1])
+        with ricol:
+            if st.button("⟳ Refresh", key="ref_inv", use_container_width=True):
+                st.rerun()
+
+        inv_data = _api("get", "/admin/invites")
+        invites = inv_data if isinstance(inv_data, list) else []
+        with icol:
+            st.markdown(f"**{len(invites)}** invite(s)")
+
+        if not invites:
+            st.info("No invites yet.")
+        else:
+            for inv in invites:
+                used = inv.get("used", False)
+                owner = inv.get("owner", "")
+                token_short = inv.get("token", "")[:12] + "…"
+                expires = inv.get("expires_at", "")[:10]
+                status_label = "USED" if used else "PENDING"
+                status_cls = "nr-completed" if used else "nr-pending"
+
+                row_col, del_col = st.columns([6, 1])
+                with row_col:
+                    st.markdown(f"""
+<div class="nr-job">
+  <span class="nr-job-s {status_cls}">{status_label}</span>
+  <span style="flex:1;color:#e2e8f0;font-weight:600">{owner}</span>
+  <span style="color:#6b7280;font-size:.72rem;font-family:monospace">{token_short}</span>
+  <span style="color:#4b5563;font-size:.7rem">exp {expires}</span>
+</div>""", unsafe_allow_html=True)
+                with del_col:
+                    if not used:
+                        if st.button("✕", key=f"di_{inv['id']}", help="Revoke"):
+                            _api("delete", f"/admin/invites/{inv['id']}", silent=True)
+                            st.rerun()
+
+    # ── API Keys list tab ─────────────────────────────────────────────────────
+    with tab_keys:
+        kcol, rkcol = st.columns([5, 1])
+        with rkcol:
+            if st.button("⟳ Refresh", key="ref_keys", use_container_width=True):
+                st.rerun()
+
+        keys_data = _api("get", "/admin/keys")
+        keys = keys_data if isinstance(keys_data, list) else []
+        with kcol:
+            st.markdown(f"**{len(keys)}** key(s)")
+
+        if not keys:
+            st.info("No API keys yet.")
+        else:
+            for k in keys:
+                last_used = (k.get("last_used_at") or "never")[:10]
+                created = k.get("created_at", "")[:10]
+                row_col, del_col = st.columns([6, 1])
+                with row_col:
+                    st.markdown(f"""
+<div class="nr-job">
+  <span style="flex:1;color:#e2e8f0;font-weight:600">{k.get('owner','')}</span>
+  <span style="color:#6b7280;font-size:.72rem">created {created}</span>
+  <span style="color:#4b5563;font-size:.7rem">last used {last_used}</span>
+</div>""", unsafe_allow_html=True)
+                with del_col:
+                    if st.button("✕", key=f"dk_{k['id']}", help="Revoke key"):
+                        _api("delete", f"/admin/keys/{k['id']}", silent=True)
+                        st.rerun()

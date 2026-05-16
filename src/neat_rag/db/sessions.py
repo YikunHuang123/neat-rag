@@ -233,4 +233,3 @@ class SessionRepository:
         except Exception as e:
             logger.error("Failed to fetch messages", session_id=session_id, error=str(e))
             raise DatabaseError(f"Failed to fetch messages: {e}")
-aise DatabaseError(f"Failed to fetch messages: {e}")
