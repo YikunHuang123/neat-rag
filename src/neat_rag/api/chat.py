@@ -5,10 +5,13 @@ from typing import AsyncIterator, Optional
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic_ai import Agent
 
 from neat_rag.agent.memory import load_history
 from neat_rag.agent.orchestrator import build_agent_context, get_agent, run_query
+from neat_rag.agent.prompts import build_system_prompt
 from neat_rag.agent.title import generate_session_title
+from neat_rag.agent.tools import AGENT_TOOLS, AgentContext
 from neat_rag.api.deps import get_connection
 from neat_rag.api.middleware import limiter, verify_api_key
 from neat_rag.api.schemas import ChatRequest, ChatResponse, CitationResponse
@@ -17,10 +20,25 @@ from neat_rag.db.pool import pg_pool
 from neat_rag.db.sessions import SessionRepository
 from neat_rag.logger import get_logger
 from neat_rag.models import MessageRole
+from neat_rag.providers.llm import get_llm_with_override
 from neat_rag.retrieval.citation import extract_citations
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["chat"])
+
+
+def _make_override_agent(
+    provider: str,
+    model: str,
+    api_key: str = "",
+    base_url: str = "",
+) -> Agent:
+    """Build a one-off agent with a custom LLM; reuses the singleton's retrievers."""
+    llm = get_llm_with_override(provider, model, api_key, base_url)
+    ag: Agent = Agent(llm, deps_type=AgentContext, system_prompt=build_system_prompt())
+    for tool in AGENT_TOOLS:
+        ag.tool(tool)
+    return ag
 
 
 async def _update_title(session_id: str, user_message: str) -> None:
@@ -47,11 +65,24 @@ async def chat(
     if owner is not None and session.user_id != owner:
         raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
 
+    override_agent = None
+    if body.llm_provider:
+        try:
+            override_agent = _make_override_agent(
+                body.llm_provider,
+                body.llm_model or "",
+                body.llm_api_key or "",
+                body.llm_base_url or "",
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"LLM override error: {exc}")
+
     answer, citations = await run_query(
         body.message,
         body.session_id,
         user_id=owner,
         search_type=body.search_type,
+        agent_override=override_agent,
     )
 
     if session.title == "New Chat":
@@ -98,22 +129,39 @@ async def chat_stream(
     history = await load_history(session_repo, body.session_id)
 
     async def generate() -> AsyncIterator[str]:
-        agent = get_agent()  # ensures lazy retrievers are initialised
+        # Always call get_agent() to ensure retrievers are initialised.
+        _default_agent = get_agent()
+
+        if body.llm_provider:
+            try:
+                agent = _make_override_agent(
+                    body.llm_provider,
+                    body.llm_model or "",
+                    body.llm_api_key or "",
+                    body.llm_base_url or "",
+                )
+            except Exception as exc:
+                yield f"data: {json.dumps({'type': 'error', 'content': str(exc)})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+        else:
+            agent = _default_agent
+
         ctx = build_agent_context(body.session_id, user_id=owner, search_type=body.search_type)
+        # Determine the effective provider to decide whether streaming is supported.
+        effective_provider = (body.llm_provider or settings.LLM_PROVIDER).lower()
 
         chunks: list[str] = []
         try:
-            # Fallback for providers whose streaming tool-call JSON deltas are incompatible
-            # with pydantic-ai's stream reconstruction logic.
-            if settings.LLM_PROVIDER.lower() in ["deepseek", "ollama"]:
-                import asyncio
+            # Fallback for providers whose streaming tool-call JSON deltas are
+            # incompatible with pydantic-ai's stream reconstruction logic.
+            if effective_provider in ["deepseek", "ollama"]:
                 result = await agent.run(
                     body.message,
                     deps=ctx,
                     message_history=history,
                 )
-                
-                # Simulate streaming output so the UI still animates
+                # Simulate streaming output so the UI still animates.
                 text = result.output
                 chunk_size = 15
                 for i in range(0, len(text), chunk_size):

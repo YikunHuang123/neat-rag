@@ -65,6 +65,70 @@ def get_llm() -> Any:
         )
 
 
+def get_llm_with_override(
+    provider: str,
+    model: str,
+    api_key: str = "",
+    base_url: str = "",
+) -> Any:
+    """
+    Create an LLM instance with explicitly provided credentials.
+    Falls back to settings values when api_key / base_url are empty.
+    Used for per-request model overrides from the UI.
+    """
+    p = provider.lower().strip()
+    logger.info("LLM override active", provider=p, model=model)
+
+    if p == "openai":
+        key = api_key or settings.OPENAI_API_KEY
+        return OpenAIModel(model_name=model, provider=OpenAIProvider(api_key=key))
+
+    elif p == "gemini":
+        from pydantic_ai.models.google import GoogleModel
+        from pydantic_ai.providers.google import GoogleProvider
+        key = api_key or settings.GEMINI_API_KEY
+        return GoogleModel(model_name=model, provider=GoogleProvider(api_key=key))
+
+    elif p == "anthropic":
+        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
+        key = api_key or settings.ANTHROPIC_API_KEY
+        return AnthropicModel(model_name=model, provider=AnthropicProvider(api_key=key))
+
+    elif p == "ollama":
+        url = base_url or settings.OLLAMA_BASE_URL
+        return OpenAIModel(
+            model_name=model,
+            provider=OpenAIProvider(
+                base_url=f"{url.rstrip('/')}/v1",
+                api_key="ollama",
+            ),
+        )
+
+    elif p == "deepseek":
+        key = api_key or settings.DEEPSEEK_API_KEY
+        url = base_url or settings.DEEPSEEK_BASE_URL
+        base = f"{url.rstrip('/')}/v1" if not url.rstrip("/").endswith("/v1") else url
+        return OpenAIModel(model_name=model, provider=OpenAIProvider(base_url=base, api_key=key))
+
+    elif p == "custom":
+        if not base_url:
+            raise LLMProviderError("Custom provider requires a Base URL.")
+        base = base_url.rstrip("/")
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        return OpenAIModel(
+            model_name=model,
+            provider=OpenAIProvider(base_url=base, api_key=api_key or "custom"),
+        )
+
+    else:
+        raise LLMProviderError(
+            f"Unsupported override provider '{p}'. "
+            f"Supported: {SUPPORTED_LLM_PROVIDERS + ['custom']}"
+        )
+
+
 def get_langchain_llm(provider: str = None, model: str = None) -> Any:
     """
     Return a LangChain-compatible ChatModel instance (BaseChatModel).

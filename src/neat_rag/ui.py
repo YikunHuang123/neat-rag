@@ -281,6 +281,25 @@ section[data-testid="stSidebar"] button {
 """, unsafe_allow_html=True)
 
 
+# ── LLM provider / model catalogue ───────────────────────────────────────────
+_PROVIDER_OPTS: Dict[str, str] = {
+    "server":    "Server default",
+    "openai":    "OpenAI",
+    "gemini":    "Google Gemini",
+    "anthropic": "Anthropic",
+    "deepseek":  "DeepSeek",
+    "ollama":    "Ollama (local)",
+    "custom":    "Custom endpoint",
+}
+_MODEL_DEFAULTS: Dict[str, str] = {
+    "openai":    "gpt-4o-mini",
+    "gemini":    "gemini-2.5-flash",
+    "anthropic": "claude-3-5-haiku-latest",
+    "deepseek":  "deepseek-chat",
+    "ollama":    "llama3",
+    "custom":    "",
+}
+
 # ── Session-state defaults ────────────────────────────────────────────────────
 _DEFAULTS: Dict[str, Any] = {
     "api_url": "http://localhost:8058",
@@ -297,6 +316,11 @@ _DEFAULTS: Dict[str, Any] = {
     "_redeemed_key": None,
     "_invite_token_result": None,
     "_auth_mode": None,  # "open" | "auth" | None (not yet detected)
+    # LLM model override (set from the Model picker in the sidebar)
+    "llm_provider": "server",   # "server" = use server's configured LLM
+    "llm_model_inp": "",
+    "llm_api_key_inp": "",
+    "llm_base_url_inp": "",
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -410,7 +434,17 @@ def _sse_generator(
 ) -> Generator[str, None, None]:
     """Yield text deltas from /chat/stream; write citations+message_id into `result`."""
     url = st.session_state.api_url.rstrip("/") + "/chat/stream"
-    payload = {"message": message, "session_id": session_id, "search_type": search_type}
+    payload: Dict[str, Any] = {"message": message, "session_id": session_id, "search_type": search_type}
+    # Attach LLM override when the user has chosen a specific provider
+    if st.session_state.llm_provider != "server":
+        payload["llm_provider"] = st.session_state.llm_provider
+        _m = st.session_state.get("llm_model_inp") or _MODEL_DEFAULTS.get(st.session_state.llm_provider, "")
+        if _m:
+            payload["llm_model"] = _m
+        if st.session_state.get("llm_api_key_inp"):
+            payload["llm_api_key"] = st.session_state.llm_api_key_inp
+        if st.session_state.get("llm_base_url_inp"):
+            payload["llm_base_url"] = st.session_state.llm_base_url_inp
     try:
         with httpx.Client(timeout=120) as c:
             with c.stream("POST", url, json=payload, headers=_hdrs()) as resp:
@@ -669,6 +703,70 @@ with st.sidebar:
         index=0 if st.session_state.search_type == "hybrid" else 1,
     )
 
+    # ── Model ─────────────────────────────────────────────────────────────────
+    st.markdown('<div class="nr-section">Model</div>', unsafe_allow_html=True)
+
+    _pkeys   = list(_PROVIDER_OPTS.keys())
+    _plabels = list(_PROVIDER_OPTS.values())
+    _cur_idx = _pkeys.index(st.session_state.llm_provider) if st.session_state.llm_provider in _pkeys else 0
+
+    _sel_label = st.selectbox(
+        "LLM Provider",
+        options=_plabels,
+        index=_cur_idx,
+        label_visibility="collapsed",
+        help="Choose a model provider. 'Server default' uses the server's configured LLM.",
+    )
+    _sel_provider = _pkeys[_plabels.index(_sel_label)]
+
+    # Auto-reset dependent fields when provider changes
+    if _sel_provider != st.session_state.llm_provider:
+        st.session_state.llm_provider    = _sel_provider
+        st.session_state.llm_model_inp   = _MODEL_DEFAULTS.get(_sel_provider, "")
+        st.session_state.llm_api_key_inp = ""
+        st.session_state.llm_base_url_inp = ""
+        st.rerun()
+
+    if _sel_provider != "server":
+        # Model name — pre-filled with provider default, editable
+        st.text_input(
+            "Model",
+            placeholder=_MODEL_DEFAULTS.get(_sel_provider, "model-name"),
+            key="llm_model_inp",
+            help="Model identifier (e.g. gpt-4o, llama3). Leave blank to use the provider default.",
+        )
+
+        # Cloud providers: optional API key (falls back to server's key if empty)
+        if _sel_provider not in ("ollama",):
+            st.text_input(
+                "API Key",
+                placeholder="Leave blank to use server's key",
+                type="password",
+                key="llm_api_key_inp",
+                help="Your personal API key. Leave blank to use the key configured on the server.",
+            )
+
+        # Local / custom providers: endpoint URL
+        if _sel_provider in ("ollama", "custom"):
+            _url_ph = (
+                "http://localhost:11434"
+                if _sel_provider == "ollama"
+                else "https://api.example.com"
+            )
+            st.text_input(
+                "Endpoint URL",
+                placeholder=_url_ph,
+                key="llm_base_url_inp",
+                help="Base URL of the OpenAI-compatible endpoint (without /v1).",
+            )
+
+        _active_model = (
+            st.session_state.llm_model_inp
+            or _MODEL_DEFAULTS.get(_sel_provider, "")
+        )
+        if _active_model:
+            st.caption(f"Using **{_active_model}** via {_PROVIDER_OPTS[_sel_provider]}")
+
     # ── Connection ────────────────────────────────────────────────────────────
     with st.expander("Connection", expanded=False):
         new_url = st.text_input(
@@ -712,7 +810,17 @@ Get started in three steps:
         title = current_sess["title"] if current_sess else "Chat"
 
         st.markdown(f"## {title}")
-        st.caption(f"Session `{sid[:8]}…`  ·  mode: **{st.session_state.search_type}**")
+        _model_badge = ""
+        if st.session_state.llm_provider != "server":
+            _active = (
+                st.session_state.get("llm_model_inp")
+                or _MODEL_DEFAULTS.get(st.session_state.llm_provider, "")
+            )
+            if _active:
+                _model_badge = f"  ·  model: **{_active}**"
+        st.caption(
+            f"Session `{sid[:8]}…`  ·  mode: **{st.session_state.search_type}**{_model_badge}"
+        )
         st.divider()
 
         # Render history

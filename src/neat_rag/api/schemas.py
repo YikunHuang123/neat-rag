@@ -18,6 +18,11 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
     session_id: str
     search_type: SearchType = SearchType.HYBRID
+    # Optional per-request LLM override (set from the UI model picker)
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    llm_base_url: Optional[str] = None
 
 
 class CitationResponse(BaseModel):

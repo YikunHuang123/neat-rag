@@ -107,20 +107,24 @@ async def run_query(
     session_id: str,
     user_id: str | None = None,
     search_type: SearchType = SearchType.HYBRID,
+    agent_override: "Agent[AgentContext, str] | None" = None,
 ) -> tuple[str, list[Citation]]:
     """
     Run a RAG query through neat_agent and persist the exchange to the session.
 
     Args:
-        question:   The user's question (natural language).
-        session_id: UUID of the active chat session (must already exist in DB).
-        user_id:    Optional caller identity for audit / personalisation.
-        search_type: The search strategy to use (vector or hybrid).
+        question:       The user's question (natural language).
+        session_id:     UUID of the active chat session (must already exist in DB).
+        user_id:        Optional caller identity for audit / personalisation.
+        search_type:    The search strategy to use (vector or hybrid).
+        agent_override: Optional pre-built Agent to use instead of the singleton
+                        (e.g. when the UI selects a custom LLM provider).
 
     Returns:
         (answer_text, citations_referenced)
     """
-    agent = get_agent()
+    _default = get_agent()  # always call to ensure retrievers are initialised
+    agent = agent_override if agent_override is not None else _default
 
     # Load prior conversation turns so the agent has multi-turn context
     async with pg_pool.get_connection() as conn:
