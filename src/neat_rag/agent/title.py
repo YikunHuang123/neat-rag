@@ -15,6 +15,7 @@ _SYSTEM_PROMPT = (
     "Rules:\n"
     "- ≤15 characters if Chinese, ≤8 words if English\n"
     "- No quotes, no trailing punctuation, no explanation — title only\n"
+    "- Output the title in the SAME language as the user's message\n"
     "- If the message is a greeting, self-introduction, or has no clear topic "
     "(e.g. '你好', 'Hi', '我是张三'), output exactly: 新的对话\n"
     "- Never copy the user's message verbatim; always extract the topic"
