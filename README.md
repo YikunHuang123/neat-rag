@@ -85,7 +85,9 @@ cp .env.example .env
 # Edit .env — at minimum set your LLM and embedding provider keys
 
 # unset DOCKER_CONTENT_TRUST  # On Mac: avoids "No such image" pull bug
-docker compose up -d --build
+
+# docker compose up -d --build  # first start
+docker compose up -d          # follow-up start command
 
 # Run database migrations
 docker exec -it neat-rag-api alembic upgrade head

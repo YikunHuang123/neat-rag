@@ -79,6 +79,10 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+    volumes:
+     - ./src:/app/src
+
+
   # ── Worker (arq background tasks) ─────────────────────────────────────────
   worker:
     build:
@@ -104,6 +108,10 @@ services:
         condition: service_started
     restart: unless-stopped
 
+
+    volumes:
+      - ./src:/app/src
+
   # ── UI (Streamlit) ────────────────────────────────────────────────────────
   ui:
     build:
@@ -127,6 +135,10 @@ services:
       retries: 5
       start_period: 20s
     restart: unless-stopped
+
+
+    volumes:
+      - ./src:/app/src
 
 volumes:
   pgdata:

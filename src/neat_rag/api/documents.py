@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 import asyncpg
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, Response
 
 from neat_rag.api.deps import get_connection, get_pipeline, get_store
 from neat_rag.api.middleware import verify_api_key
@@ -178,6 +178,17 @@ async def get_job(
     if owner is not None and job.user_id != owner:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return _to_job_response(job)
+
+
+@jobs_router.delete("/jobs", status_code=204)
+async def delete_jobs(
+    conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
+):
+    """Delete all ingestion jobs for the current user."""
+    job_repo = JobRepository(conn)
+    await job_repo.delete_jobs(user_id=owner)
+    return Response(status_code=204)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

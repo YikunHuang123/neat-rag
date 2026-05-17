@@ -7,8 +7,10 @@ Run:
 """
 import html as _html
 import json
+import os
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Generator, List, Optional
 
 import httpx
@@ -322,7 +324,7 @@ _MODEL_DEFAULTS: Dict[str, str] = {
 
 # ── Session-state defaults ────────────────────────────────────────────────────
 _DEFAULTS: Dict[str, Any] = {
-    "api_url": "http://localhost:8058",
+    "api_url": os.getenv("API_URL", "http://localhost:8058"),
     "api_key": "",
     "search_type": "hybrid",
     "current_session_id": None,
@@ -584,6 +586,75 @@ def _on_rename_submit(sid: str):
             _api("patch", f"/sessions/{sid}", json={"title": new_title})
             _refresh_sessions()
     st.session_state.editing_session_id = None
+
+
+def _is_likely_downloading(job: Dict) -> bool:
+    """True when a job is likely stalled on a first-run model download (Docling / SmolVLM)."""
+    if job.get("status") not in ("pending", "processing"):
+        return False
+    if job.get("progress", 0.0) > 0.15:
+        return False
+    created = job.get("created_at", "")
+    if not created:
+        return False
+    try:
+        dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).total_seconds() > 20
+    except Exception:
+        return False
+
+
+# ── Jobs panel (fragment — auto-refreshes every 3 s while page is open) ───────
+@st.fragment(run_every=3)
+def _jobs_panel():
+    jcol, rjcol, cjcol = st.columns([4, 1, 1])
+    with rjcol:
+        if st.button("⟳ Refresh", key="ref_jobs", use_container_width=True):
+            st.rerun(scope="fragment")
+    with cjcol:
+        if st.button("🗑 Clear", key="clr_jobs", use_container_width=True, help="Clear all ingestion jobs"):
+            _api("delete", "/jobs", silent=True)
+            st.rerun(scope="fragment")
+
+    jdata = _api("get", "/jobs?limit=30", silent=True)
+    jobs = (jdata or {}).get("items", [])
+    has_active = any(j.get("status") in ("pending", "processing") for j in jobs)
+
+    with jcol:
+        live_badge = (
+            ' &nbsp;<span style="color:#34D399;font-size:0.7rem;font-weight:700">● Live</span>'
+            if has_active else ""
+        )
+        st.markdown(f"**{len(jobs)}** recent job(s){live_badge}", unsafe_allow_html=True)
+
+    if not jobs:
+        st.info("No ingestion jobs yet.")
+    else:
+        for job in jobs:
+            status = job.get("status", "pending")
+            progress = job.get("progress", 0.0)
+            created = job.get("created_at", "")[:10]
+
+            jrow, jprog = st.columns([3, 2])
+            with jrow:
+                st.markdown(f"""
+<div class="nr-job">
+  <span class="nr-job-s nr-{status}">{status.upper()}</span>
+  <span style="flex:1;color:#9ca3af">{job.get('filename','')}</span>
+  <span style="color:#4b5563;font-size:.7rem">{created}</span>
+</div>""", unsafe_allow_html=True)
+            with jprog:
+                if status == "pending":
+                    st.progress(0.0, text="Queued…")
+                elif status == "processing":
+                    pct = min(progress, 1.0)
+                    st.progress(pct, text=f"{pct * 100:.0f}%")
+                elif status == "completed":
+                    st.progress(1.0, text="✓ Done")
+                if job.get("error"):
+                    st.caption(f":red[{job['error']}]")
+                if _is_likely_downloading(job):
+                    st.caption("First run with images — downloading ~1 GB model weights, please wait…")
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -1037,69 +1108,135 @@ elif st.session_state.nav == "documents":
     with tab_upload:
         st.markdown("Supported formats: **PDF · DOCX · Markdown · TXT · HTML** &nbsp;(max 50 MB each)")
 
-        files = st.file_uploader(
-            "Drop files here or click to browse",
-            type=["pdf", "docx", "md", "txt", "html"],
-            accept_multiple_files=True,
-            label_visibility="collapsed",
-        )
+        if "uploader_key" not in st.session_state:
+            st.session_state.uploader_key = 1
+        if "upload_results" not in st.session_state:
+            st.session_state.upload_results = []
 
-        if files:
-            st.markdown(f"**{len(files)} file(s) selected:**")
-            for f in files:
-                st.caption(f"· {f.name}  ({f.size / 1024:.0f} KB)")
+        # Wrap the uploader in a clearable placeholder so it vanishes after ingestion starts
+        _uploader_slot = st.empty()
+        files = None
+        _ingest_btn = False
 
-            if st.button("Ingest selected files", type="primary"):
+        with _uploader_slot.container():
+            files = st.file_uploader(
+                "Drop files here or click to browse",
+                type=["pdf", "docx", "md", "txt", "html"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+                key=f"uploader_{st.session_state.uploader_key}"
+            )
+            if files:
+                st.markdown(f"**{len(files)} file(s) selected:**")
                 for f in files:
-                    with st.spinner(f"Uploading {f.name}…"):
-                        try:
-                            mime = f.type or "application/octet-stream"
-                            with httpx.Client(timeout=30) as c:
-                                resp = c.post(
-                                    st.session_state.api_url.rstrip("/") + "/documents/upload",
-                                    files={"file": (f.name, f.getvalue(), mime)},
-                                    headers=_hdrs(),
-                                )
-                                resp.raise_for_status()
-                                jdata = resp.json()
-                            st.success(f"✓ **{f.name}** → job `{jdata['job_id']}`")
-                        except Exception as exc:
-                            st.error(f"✗ {f.name}: {exc}")
+                    st.caption(f"· {f.name}  ({f.size / 1024:.0f} KB)")
+                _ingest_btn = st.button("Ingest selected files", type="primary")
+
+        # Show recent upload results if any
+        if st.session_state.upload_results and not _ingest_btn:
+            st.markdown('<div class="nr-section">Recent Uploads</div>', unsafe_allow_html=True)
+            for res in st.session_state.upload_results:
+                if res["status"] == "completed":
+                    st.success(f"✓ **{res['fname']}** ingested successfully")
+                else:
+                    st.error(f"✗ {res['fname']}: {res.get('error', 'Failed')}")
+            if st.button("Clear History"):
+                st.session_state.upload_results = []
+                st.rerun()
+
+        if _ingest_btn and files:
+            # Clear previous results
+            st.session_state.upload_results = []
+            _uploader_slot.empty()  # hide the file picker and button
+
+            job_map: Dict[str, str] = {}
+            bars: Dict[str, Any] = {}
+            hints: Dict[str, Any] = {}
+
+            # ── Upload phase ──────────────────────────────────────────────
+            for f in files:
+                bar = st.progress(0.0, text=f"Uploading {f.name}…")
+                hint = st.empty()
+                bars[f.name] = bar
+                hints[f.name] = hint
+                try:
+                    mime = f.type or "application/octet-stream"
+                    with httpx.Client(timeout=30) as c:
+                        resp = c.post(
+                            st.session_state.api_url.rstrip("/") + "/documents/upload",
+                            files={"file": (f.name, f.getvalue(), mime)},
+                            headers=_hdrs(),
+                        )
+                        resp.raise_for_status()
+                        jdata = resp.json()
+                    job_map[f.name] = jdata.get("job_id", "")
+                    bar.progress(0.02, text=f"{f.name} — queued, waiting for worker…")
+                except Exception as exc:
+                    bar.empty()
+                    hint.empty()
+                    st.error(f"✗ {f.name}: {exc}")
+                    st.session_state.upload_results.append({"fname": f.name, "status": "failed", "error": str(exc)})
+
+            # ── Monitor phase — poll all jobs until complete ───────────────
+            pending: Dict[str, str] = {**job_map}
+            for _ in range(120):
+                if not pending:
+                    break
+                done_now: List[str] = []
+                for fname, jid in pending.items():
+                    jr = _api("get", f"/jobs/{jid}", silent=True)
+                    if not jr:
+                        done_now.append(fname)
+                        continue
+                    pct = jr.get("progress", 0.0)
+                    status = jr.get("status", "pending")
+                    bar = bars.get(fname)
+                    hint = hints.get(fname)
+                    if status == "pending":
+                        if bar:
+                            bar.progress(0.02, text=f"{fname} — queued…")
+                        if hint:
+                            if _is_likely_downloading(jr):
+                                hint.caption("First run with images — downloading ~1 GB model weights, please wait…")
+                            else:
+                                hint.empty()
+                    elif status == "processing":
+                        if bar:
+                            bar.progress(max(pct, 0.05), text=f"{fname} — {pct * 100:.0f}%")
+                        if hint:
+                            if _is_likely_downloading(jr):
+                                hint.caption("First run with images — downloading ~1 GB model weights, please wait…")
+                            else:
+                                hint.empty()
+                    elif status == "completed":
+                        if bar:
+                            bar.progress(1.0, text=f"✓ {fname}")
+                        if hint:
+                            hint.empty()
+                        st.success(f"✓ **{fname}** ingested successfully")
+                        st.session_state.upload_results.append({"fname": fname, "status": "completed"})
+                        done_now.append(fname)
+                    elif status == "failed":
+                        if bar:
+                            bar.empty()
+                        if hint:
+                            hint.empty()
+                        st.error(f"✗ {fname}: {jr.get('error', 'Processing failed')}")
+                        st.session_state.upload_results.append({"fname": fname, "status": "failed", "error": jr.get('error', 'Processing failed')})
+                        done_now.append(fname)
+                for fname in done_now:
+                    pending.pop(fname, None)
+                if pending:
+                    time.sleep(1)
+            
+            # Reset UI and show results
+            time.sleep(0.5)  # slight pause to let users see 100% complete
+            st.session_state.uploader_key += 1
+            st.rerun()
 
     # ── Jobs tab ──────────────────────────────────────────────────────────────
     with tab_jobs:
-        jcol, rjcol = st.columns([5, 1])
-        with rjcol:
-            if st.button("⟳ Refresh", key="ref_jobs", use_container_width=True):
-                st.rerun()
-
-        jdata = _api("get", "/jobs?limit=30")
-        if jdata:
-            jobs = jdata.get("items", [])
-            with jcol:
-                st.markdown(f"**{len(jobs)}** recent job(s)")
-
-            if not jobs:
-                st.info("No ingestion jobs yet.")
-            else:
-                for job in jobs:
-                    status = job.get("status", "pending")
-                    progress = job.get("progress", 0.0)
-                    created = job.get("created_at", "")[:10]
-
-                    jrow, jprog = st.columns([3, 2])
-                    with jrow:
-                        st.markdown(f"""
-<div class="nr-job">
-  <span class="nr-job-s nr-{status}">{status.upper()}</span>
-  <span style="flex:1;color:#9ca3af">{job.get('filename','')}</span>
-  <span style="color:#4b5563;font-size:.7rem">{created}</span>
-</div>""", unsafe_allow_html=True)
-                    with jprog:
-                        if status in ("processing", "completed"):
-                            st.progress(min(progress, 1.0))
-                        if job.get("error"):
-                            st.caption(f":red[{job['error']}]")
+        _jobs_panel()
 
 
 # ── Admin page ────────────────────────────────────────────────────────────────

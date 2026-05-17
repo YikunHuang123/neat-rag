@@ -175,3 +175,22 @@ class JobRepository:
         except Exception as e:
             logger.error("Failed to mark job as completed", job_id=job_id, error=str(e))
             raise DatabaseError(f"Failed to mark job as completed: {e}")
+
+    async def delete_jobs(self, user_id: Optional[str] = None) -> int:
+        """Delete ingestion jobs, optionally filtered by user_id. Returns number of deleted rows."""
+        try:
+            if user_id is not None:
+                result = await self.conn.execute(
+                    "DELETE FROM ingest_jobs WHERE user_id = $1",
+                    user_id
+                )
+            else:
+                result = await self.conn.execute("DELETE FROM ingest_jobs")
+            
+            # result is usually "DELETE N"
+            count = int(result.split()[-1]) if result.startswith("DELETE") else 0
+            logger.info("Deleted ingestion jobs", count=count, user_id=user_id)
+            return count
+        except Exception as e:
+            logger.error("Failed to delete jobs", user_id=user_id, error=str(e))
+            raise DatabaseError(f"Failed to delete jobs: {e}")
