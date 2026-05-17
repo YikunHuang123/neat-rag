@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Any
 
+from arq.connections import RedisSettings
+
 from neat_rag.config import settings
 from neat_rag.db.pool import PgPool
 from neat_rag.db.vector_store import VectorStoreBase, get_vector_store
@@ -163,3 +165,42 @@ async def _update_job(
 ) -> None:
     if job_repo and job_id:
         await job_repo.update_progress(job_id, progress, status)
+
+
+# ── arq worker task ───────────────────────────────────────────────────────────
+
+async def ingest_document(
+    ctx: dict,
+    file_path_str: str,
+    job_id: str,
+    original_name: str,
+    user_id: Optional[str] = None,
+) -> None:
+    pipeline: IngestionPipeline = ctx["pipeline"]
+    path = Path(file_path_str)
+    try:
+        await pipeline.run(path, job_id=job_id, original_name=original_name, user_id=user_id)
+    finally:
+        path.unlink(missing_ok=True)
+
+
+async def _worker_startup(ctx: dict) -> None:
+    pool = PgPool()
+    await pool.connect()
+    ctx["pg_pool"] = pool
+    ctx["pipeline"] = IngestionPipeline(pg_pool=pool)
+    logger.info("arq worker started")
+
+
+async def _worker_shutdown(ctx: dict) -> None:
+    pool: PgPool = ctx.get("pg_pool")
+    if pool:
+        await pool.disconnect()
+    logger.info("arq worker stopped")
+
+
+class WorkerSettings:
+    functions = [ingest_document]
+    on_startup = _worker_startup
+    on_shutdown = _worker_shutdown
+    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)

@@ -76,6 +76,8 @@ async def _run_ingestion(
 ) -> None:
     try:
         await pipeline.run(path, job_id=job_id, original_name=original_name, user_id=user_id)
+    except Exception as e:
+        logger.error("Background ingestion task failed", job_id=job_id, error=str(e))
     finally:
         path.unlink(missing_ok=True)
 
