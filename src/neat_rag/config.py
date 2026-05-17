@@ -124,6 +124,7 @@ class Settings(BaseSettings):
     COHERE_API_KEY: str = ""
 
     # --- Advanced Retrieval Settings ---
+    DEFAULT_SEARCH_TYPE: str = "hybrid" # Options: "vector", "hybrid"
     ENABLE_RERANK: bool = True
     ENABLE_HYDE: bool = False
     ENABLE_MULTI_QUERY: bool = False

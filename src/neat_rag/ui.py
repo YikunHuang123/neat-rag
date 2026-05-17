@@ -15,6 +15,7 @@ from typing import Any, Dict, Generator, List, Optional
 
 import httpx
 import streamlit as st
+from neat_rag.config import settings
 
 # ── Page configuration ────────────────────────────────────────────────────────
 st.set_page_config(
@@ -326,7 +327,7 @@ _MODEL_DEFAULTS: Dict[str, str] = {
 _DEFAULTS: Dict[str, Any] = {
     "api_url": os.getenv("API_URL", "http://localhost:8058"),
     "api_key": "",
-    "search_type": "hybrid",
+    "search_type": settings.DEFAULT_SEARCH_TYPE,
     "current_session_id": None,
     "sessions": [],
     "messages": [],
@@ -663,15 +664,30 @@ with st.sidebar:
     pill_cls = "nr-online" if online else "nr-offline"
     pill_txt = "Connected" if online else "Offline"
 
-    st.markdown(f"""
-<div class="nr-brand">
+    # Header with Brand and Admin button
+    hcol1, hcol2 = st.columns([4, 1], vertical_alignment="center")
+    with hcol1:
+        st.markdown(f"""
+<div class="nr-brand" style="border-bottom:none; margin-bottom:0; padding-bottom:0;">
   <div class="nr-logo">N</div>
   <div class="nr-wordmark">
     <div class="nr-name">Neat-RAG</div>
     <div class="nr-tag">Agentic Retrieval</div>
   </div>
-</div>
-<div style="margin-bottom:.9rem">
+</div>""", unsafe_allow_html=True)
+    with hcol2:
+        if st.session_state.api_key or _detect_open_mode() == "open":
+            if st.button(
+                "🔑",
+                help="Admin Panel",
+                type="primary" if st.session_state.nav == "admin" else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state.nav = "admin"
+                st.rerun()
+
+    st.markdown(f"""
+<div style="margin-bottom:.9rem; padding-top:1.1rem; border-top:1px solid rgba(255,255,255,.07);">
   <span class="nr-pill {pill_cls}">
     <span class="nr-pill-dot"></span>{pill_txt}
   </span>
@@ -698,9 +714,12 @@ with st.sidebar:
         st.rerun()
 
     if st.session_state.api_key:
-        # Authenticated — show identity
-        user_display = st.session_state.current_user or "Authenticated"
-        st.caption(f"👤 {user_display}")
+        # Only show as authenticated if we actually got a user back from the API
+        if st.session_state.current_user:
+            st.caption(f"👤 {st.session_state.current_user}")
+        else:
+            # We have a key, but haven't successfully fetched sessions/user yet
+            st.caption("🔴 Unverified")
     else:
         auth_mode = _detect_open_mode()
         if auth_mode == "open":
@@ -763,16 +782,6 @@ with st.sidebar:
             type="primary" if st.session_state.nav == "documents" else "secondary",
         ):
             st.session_state.nav = "documents"
-            st.rerun()
-
-    # Admin is visible to anyone who has a key OR when the server runs in open mode
-    if st.session_state.api_key or _detect_open_mode() == "open":
-        if st.button(
-            "🔑  Admin",
-            use_container_width=True,
-            type="primary" if st.session_state.nav == "admin" else "secondary",
-        ):
-            st.session_state.nav = "admin"
             st.rerun()
 
     # ── Sessions (chat page only) ─────────────────────────────────────────────
@@ -872,14 +881,6 @@ with st.sidebar:
                     st.session_state._sessions_dirty = True
                     st.rerun()
 
-    # ── Preferences ───────────────────────────────────────────────────────────
-    st.markdown('<div class="nr-section">Preferences</div>', unsafe_allow_html=True)
-    st.session_state.search_type = st.selectbox(
-        "Search mode",
-        options=["hybrid", "vector"],
-        index=0 if st.session_state.search_type == "hybrid" else 1,
-    )
-
     # ── Model ─────────────────────────────────────────────────────────────────
     st.markdown('<div class="nr-section">Model</div>', unsafe_allow_html=True)
 
@@ -944,26 +945,27 @@ with st.sidebar:
         if _active_model:
             st.caption(f"Using **{_active_model}** via {_PROVIDER_OPTS[_sel_provider]}")
 
-    # ── Connection ────────────────────────────────────────────────────────────
-    with st.expander("Connection", expanded=False):
-        new_url = st.text_input(
-            "API URL", value=st.session_state.api_url,
-            placeholder="http://localhost:8058", label_visibility="collapsed",
-        )
-        if new_url != st.session_state.api_url:
-            st.session_state.api_url = new_url.strip()
-            st.session_state.session_page = 1
-            st.session_state._sessions_dirty = True
-            st.session_state._health_ts = 0.0
-            st.session_state._auth_mode = None
-            st.rerun()
+    # ── Connection (Only shown in dev/open mode) ──────────────────────────────
+    if not settings.ENABLE_AUTH:
+        with st.expander("Connection", expanded=False):
+            new_url = st.text_input(
+                "API URL", value=st.session_state.api_url,
+                placeholder="http://localhost:8058", label_visibility="collapsed",
+            )
+            if new_url != st.session_state.api_url:
+                st.session_state.api_url = new_url.strip()
+                st.session_state.session_page = 1
+                st.session_state._sessions_dirty = True
+                st.session_state._health_ts = 0.0
+                st.session_state._auth_mode = None
+                st.rerun()
 
-        if st.button("⟳  Refresh status", use_container_width=True):
-            st.session_state._health_ts = 0.0
-            st.session_state.session_page = 1
-            st.session_state._sessions_dirty = True
-            st.session_state._auth_mode = None
-            st.rerun()
+            if st.button("⟳  Refresh status", use_container_width=True):
+                st.session_state._health_ts = 0.0
+                st.session_state.session_page = 1
+                st.session_state._sessions_dirty = True
+                st.session_state._auth_mode = None
+                st.rerun()
 
 
 # ── Chat page ─────────────────────────────────────────────────────────────────
@@ -1087,7 +1089,7 @@ elif st.session_state.nav == "documents":
                 for doc in docs:
                     icon = _MIME_ICON.get(doc.get("mime_type", ""), "📁")
                     created = doc.get("created_at", "")[:10]
-                    dcol, bcol = st.columns([5, 1])
+                    dcol, bcol = st.columns([5, 1], vertical_alignment="center")
                     with dcol:
                         st.markdown(f"""
 <div class="nr-doc">
