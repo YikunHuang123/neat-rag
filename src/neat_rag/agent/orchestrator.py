@@ -14,6 +14,9 @@ that orchestrator.py can import them without tools.py importing back.
 """
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 from pydantic_ai import Agent
 
 from neat_rag.agent.memory import load_history
@@ -25,6 +28,7 @@ from neat_rag.agent.tools import (
     AGENT_TOOLS,
     vector_search,
 )
+from neat_rag.config import settings
 from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.pool import pg_pool
 from neat_rag.db.sessions import SessionRepository
@@ -66,7 +70,7 @@ def get_agent() -> Agent[AgentContext, str]:
         _agent = Agent(
             get_llm(),
             deps_type=AgentContext,
-            system_prompt=build_system_prompt(),
+            system_prompt=build_system_prompt(multimodal=settings.LLM_MULTIMODAL),
         )
 
         for tool in AGENT_TOOLS:
@@ -121,6 +125,56 @@ def inject_language_directive(question: str) -> str:
     )
 
 
+_IMAGE_MEDIA_TYPES: dict[str, str] = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png",  ".gif": "image/gif",
+    ".webp": "image/webp", ".bmp": "image/bmp",
+}
+
+
+async def _load_relevant_images(question: str, user_id: str | None, top_k: int = 3) -> list:
+    """
+    Pre-retrieve image chunks relevant to *question* and return their binary
+    content wrapped in pydantic-ai BinaryContent objects.
+
+    Only called when LLM_MULTIMODAL=True.  The extra vector search is a small
+    latency cost that enables the vision LLM to reason directly over images
+    rather than relying solely on text descriptions.
+    """
+    try:
+        from pydantic_ai import BinaryContent
+    except ImportError:
+        logger.warning("pydantic_ai.BinaryContent unavailable — multimodal disabled")
+        return []
+
+    try:
+        embedder = get_embedder()
+        store = get_vector_store()
+        embedding = await embedder.embed([question])
+        # Search with a wider net; filter to image chunks below
+        hits = await store.vector_search(embedding[0], top_k=top_k * 3, user_id=user_id)
+
+        parts: list = []
+        seen: set[str] = set()
+        for hit in hits:
+            image_path = hit.metadata.get("image_path")
+            if not image_path or image_path in seen:
+                continue
+            p = Path(image_path)
+            if not p.exists():
+                continue
+            media_type = _IMAGE_MEDIA_TYPES.get(p.suffix.lower(), "image/jpeg")
+            parts.append(BinaryContent(data=p.read_bytes(), media_type=media_type))
+            seen.add(image_path)
+            if len(parts) >= top_k:
+                break
+
+        return parts
+    except Exception as e:
+        logger.warning("Failed to load relevant images for multimodal query", error=str(e))
+        return []
+
+
 async def run_query(
     question: str,
     session_id: str,
@@ -160,6 +214,17 @@ async def run_query(
 
     ctx = build_agent_context(session_id, user_id, search_type=search_type)
 
+    # When LLM_MULTIMODAL=True, pre-retrieve relevant image files and include
+    # them in the initial message so the vision LLM can see them directly.
+    # Non-multimodal LLMs already receive description + OCR text via the
+    # normal search tool, so this path is skipped for them.
+    user_content: Any = question
+    if settings.LLM_MULTIMODAL:
+        image_parts = await _load_relevant_images(original_question, user_id)
+        if image_parts:
+            user_content = [question] + image_parts
+            logger.info("Multimodal: images attached to query", count=len(image_parts))
+
     logger.info(
         "Running agent query",
         session_id=session_id,
@@ -169,7 +234,7 @@ async def run_query(
     )
 
     result = await agent.run(
-        question,
+        user_content,
         deps=ctx,
         message_history=history,
     )

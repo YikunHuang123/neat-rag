@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "deepseek"
     LLM_MODEL: str = "deepseek-chat"
 
+    # Set to True when using a vision-capable LLM (e.g. gpt-4o, llava, qwen2-vl).
+    # When enabled, relevant images are included alongside the question at inference time.
+    # Non-multimodal LLMs still receive the VLM description + OCR text as fallback.
+    LLM_MULTIMODAL: bool = True
+
     # --- Evaluation Configuration ---
     # Provider for ragas/evaluation (recommends high-reasoning models)
     EVAL_LLM_PROVIDER: str = "deepseek"
@@ -144,6 +149,14 @@ class Settings(BaseSettings):
     # slowapi limit strings — see https://limits.readthedocs.io/en/stable/string-notation.html
     RATE_LIMIT_DEFAULT: str = "60/minute"
     RATE_LIMIT_CHAT: str = "10/minute"
+
+    # --- Image Support ---
+    IMAGE_STORAGE_PATH: str = "./data/images"
+    # Languages used for OCR (pytesseract).  Separate multiple codes with '+'.
+    # Must match installed tesseract language packs (tesseract-ocr-<code>).
+    # Common codes: eng chi_sim chi_tra jpn kor ara fra deu spa rus ita por hin
+    # Set to "eng" if only English packs are installed locally.
+    OCR_LANGUAGES: str = "eng+deu+chi_sim+chi_tra+jpn+kor+ara+fra+spa+rus+ita+por+hin"
 
     # --- Infrastructure ---
     REDIS_URL: str = "redis://localhost:6379/0"

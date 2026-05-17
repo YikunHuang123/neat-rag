@@ -64,6 +64,7 @@ services:
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
       VECTOR_STORE_BACKEND: qdrant
+      IMAGE_STORAGE_PATH: /app/data/images
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,7 +81,8 @@ services:
     restart: unless-stopped
 
     volumes:
-     - ./src:/app/src
+      - ./src:/app/src
+      - imgdata:/app/data/images
 
 
   # ── Worker (arq background tasks) ─────────────────────────────────────────
@@ -99,6 +101,7 @@ services:
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
       VECTOR_STORE_BACKEND: qdrant
+      IMAGE_STORAGE_PATH: /app/data/images
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,9 +111,9 @@ services:
         condition: service_started
     restart: unless-stopped
 
-
     volumes:
       - ./src:/app/src
+      - imgdata:/app/data/images
 
   # ── UI (Streamlit) ────────────────────────────────────────────────────────
   ui:
@@ -144,3 +147,4 @@ volumes:
   pgdata:
   redisdata:
   qdrantdata:
+  imgdata:

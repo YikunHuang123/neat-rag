@@ -28,20 +28,35 @@ RUN uv pip install --python /venv/bin/python --no-deps .
 # ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
-# Install system dependencies for OpenCV (used by Docling) and curl for healthchecks.
+# Install system dependencies for OpenCV (used by Docling), tesseract (OCR for images),
+# and curl for healthchecks.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libgl1 \
     libglib2.0-0 \
     libxcb1 \
     libx11-6 \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-chi-sim \
+    tesseract-ocr-chi-tra \
+    tesseract-ocr-jpn \
+    tesseract-ocr-kor \
+    tesseract-ocr-ara \
+    tesseract-ocr-fra \
+    tesseract-ocr-deu \
+    tesseract-ocr-spa \
+    tesseract-ocr-rus \
+    tesseract-ocr-ita \
+    tesseract-ocr-por \
+    tesseract-ocr-hin \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user for security.
 RUN addgroup --system appgroup && \
     adduser --system --ingroup appgroup --home /home/appuser appuser && \
-    mkdir -p /home/appuser && \
-    chown appuser:appgroup /home/appuser
+    mkdir -p /home/appuser /app/data/images && \
+    chown -R appuser:appgroup /home/appuser /app/data/images
 
 WORKDIR /app
 
@@ -98,4 +113,5 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
 CMD ["streamlit", "run", "src/neat_rag/ui.py", \
      "--server.port=8501", \
      "--server.address=0.0.0.0", \
-     "--server.headless=true"]
+     "--server.headless=true", \
+     "--server.maxUploadSize=50"]

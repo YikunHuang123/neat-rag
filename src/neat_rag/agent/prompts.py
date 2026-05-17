@@ -57,7 +57,25 @@ A claim you cannot support with a [n] marker from the current search results mus
 
 """
 
+_MULTIMODAL_ADDENDUM = """\
 
-def build_system_prompt(domain: str | None = None) -> str:
-    """Return the system prompt with the domain description injected."""
-    return SYSTEM_PROMPT_TEMPLATE.format(domain=domain or settings.DOMAIN_DESCRIPTION)
+## Images
+
+Images from the knowledge base may be attached directly to this conversation.
+You may reference their visual content (charts, diagrams, photos, text visible in the image)
+to answer questions. Visual observations from attached images are treated as grounded sources
+and do not require a [n] citation marker — describe what you see clearly and directly.
+"""
+
+
+def build_system_prompt(domain: str | None = None, multimodal: bool = False) -> str:
+    """Return the system prompt with the domain description injected.
+
+    When multimodal=True an extra section is appended that permits the LLM
+    to reason over images attached to the conversation, without violating the
+    text-chunk grounding rule.
+    """
+    prompt = SYSTEM_PROMPT_TEMPLATE.format(domain=domain or settings.DOMAIN_DESCRIPTION)
+    if multimodal:
+        prompt += _MULTIMODAL_ADDENDUM
+    return prompt

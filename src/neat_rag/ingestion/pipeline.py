@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +66,10 @@ class IngestionPipeline:
         """
         logger.info("Ingestion started", file=file_path.name, job_id=job_id)
 
+        # Generate document ID early — needed to name the persisted image file
+        # before the temp file is cleaned up by the caller.
+        doc_id = str(uuid.uuid4())
+
         # Use a dedicated connection for job status — commits immediately per call,
         # so progress is visible even if the document insert later fails.
         async with self.pg_pool.get_connection() as status_conn:
@@ -84,9 +89,24 @@ class IngestionPipeline:
 
                 # ── Step 2: Chunk ────────────────────────────────────────
                 await _update_job(job_repo, job_id, 0.3, JobStatus.PROCESSING)
-                raw_chunks: List[RawChunk] = await asyncio.to_thread(
-                    self.chunker.chunk, content, metadata
-                )
+
+                if metadata.get("is_image"):
+                    # Images skip the generic chunker — we build exactly two
+                    # targeted chunks: one for the VLM description (captures
+                    # visual semantics) and one for the OCR text (captures
+                    # embedded characters).  Both chunks carry image_path so
+                    # the orchestrator can attach the raw image to multimodal
+                    # LLM requests.
+                    image_path_str = await asyncio.to_thread(
+                        _persist_image, file_path, doc_id, settings.IMAGE_STORAGE_PATH
+                    )
+                    metadata["image_path"] = image_path_str
+                    raw_chunks = _build_image_chunks(metadata)
+                else:
+                    raw_chunks = await asyncio.to_thread(
+                        self.chunker.chunk, content, metadata
+                    )
+
                 if not raw_chunks:
                     raise IngestionError(f"Chunking produced no chunks for '{file_path.name}'")
                 logger.info("Chunking done", file=file_path.name, chunks=len(raw_chunks))
@@ -101,7 +121,7 @@ class IngestionPipeline:
                 now = datetime.now(timezone.utc)
                 display_name = original_name or file_path.name
                 document = Document(
-                    id=str(uuid.uuid4()),
+                    id=doc_id,
                     title=display_name,
                     source=display_name,
                     mime_type=metadata.get("mime_type", "application/octet-stream"),
@@ -155,6 +175,55 @@ class IngestionPipeline:
                     await job_repo.mark_failed(job_id, str(e))
                 logger.error("Ingestion failed", file=file_path.name, error=str(e))
                 raise IngestionError(f"Ingestion failed for '{file_path.name}': {e}") from e
+
+
+def _persist_image(file_path: Path, doc_id: str, storage_path_str: str) -> str:
+    """Copy the uploaded image to persistent storage and return the saved path.
+
+    Called in a thread pool (same as extraction) to avoid blocking the event loop.
+    The caller's temp file is deleted after pipeline.run() returns, so we copy here.
+    """
+    storage = Path(storage_path_str)
+    storage.mkdir(parents=True, exist_ok=True)
+    ext = file_path.suffix.lower()
+    dest = storage / f"{doc_id}{ext}"
+    shutil.copy2(file_path, dest)
+    logger.info("Image persisted", dest=str(dest))
+    return str(dest)
+
+
+def _build_image_chunks(metadata: dict) -> List[RawChunk]:
+    """Build description and OCR chunks for an image document.
+
+    Creates at most two chunks:
+      - image_description: VLM-generated natural language description
+      - image_ocr:         pytesseract-extracted text
+
+    Either may be absent (e.g. scenic photos have no OCR text; pure-text
+    screenshots may produce an empty description).  At least one will exist
+    because ImageExtractor.extract() already guards against both being empty.
+    """
+    image_path = metadata["image_path"]
+    chunks: List[RawChunk] = []
+
+    description = metadata.get("description", "").strip()
+    ocr_text = metadata.get("ocr_text", "").strip()
+
+    if description:
+        chunks.append(RawChunk(
+            content=description,
+            start_char=0,
+            end_char=len(description),
+            metadata={"chunk_type": "image_description", "image_path": image_path},
+        ))
+    if ocr_text:
+        chunks.append(RawChunk(
+            content=ocr_text,
+            start_char=0,
+            end_char=len(ocr_text),
+            metadata={"chunk_type": "image_ocr", "image_path": image_path},
+        ))
+    return chunks
 
 
 async def _update_job(

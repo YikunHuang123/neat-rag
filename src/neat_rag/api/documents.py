@@ -1,3 +1,4 @@
+import glob
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,7 @@ from neat_rag.api.schemas import (
     UpdateDocumentRequest,
     UploadResponse,
 )
+from neat_rag.config import settings
 from neat_rag.db.documents import DocumentRepository
 from neat_rag.db.jobs import JobRepository
 from neat_rag.db.vector_store import VectorStoreBase
@@ -25,7 +27,11 @@ from neat_rag.models import Document, Job
 
 logger = get_logger(__name__)
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".md", ".txt", ".html"}
+ALLOWED_EXTENSIONS = {
+    ".pdf", ".docx", ".md", ".txt", ".html",
+    # Image formats — processed with VLM description + OCR
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+}
 MAX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB
 
 router = APIRouter(tags=["documents"])
@@ -125,6 +131,9 @@ async def delete_document(
     # For pgvector: chunks already removed by ON DELETE CASCADE.
     # For Qdrant: explicitly remove vectors from the collection.
     await store.delete_by_document(document_id)
+    # Remove persisted image file if this was an image document.
+    # Image files are named {document_id}.{ext} so we can find them by glob.
+    _delete_image_file(document_id)
 
 
 @router.patch("/documents/{document_id}", response_model=DocumentResponse)
@@ -216,3 +225,14 @@ def _to_job_response(j: Job) -> JobResponse:
         created_at=j.created_at,
         updated_at=j.updated_at,
     )
+
+
+def _delete_image_file(document_id: str) -> None:
+    """Remove the persisted image file for an image document, if it exists."""
+    pattern = str(Path(settings.IMAGE_STORAGE_PATH) / f"{document_id}.*")
+    for path in glob.glob(pattern):
+        try:
+            Path(path).unlink()
+            logger.info("Image file deleted", path=path)
+        except OSError as e:
+            logger.warning("Failed to delete image file", path=path, error=str(e))

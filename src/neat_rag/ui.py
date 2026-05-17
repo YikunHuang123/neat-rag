@@ -676,7 +676,19 @@ with st.sidebar:
   </div>
 </div>""", unsafe_allow_html=True)
     with hcol2:
-        if st.session_state.api_key or _detect_open_mode() == "open":
+        # Only show admin button if:
+        # 1. We are in dev mode (no auth) OR
+        # 2. We have a key and it successfully passes an admin-only API check
+        show_admin = False
+        if _detect_open_mode() == "open":
+            show_admin = True
+        elif st.session_state.api_key:
+            # Silent check: if this fails, we just don't show the button
+            res = _api("get", "/admin/keys", silent=True)
+            if res is not None:
+                show_admin = True
+
+        if show_admin:
             if st.button(
                 "🔑",
                 help="Admin Panel",
@@ -1065,6 +1077,11 @@ elif st.session_state.nav == "documents":
         "text/markdown": "📋",
         "text/plain": "📃",
         "text/html": "🌐",
+        "image/jpeg": "🖼️",
+        "image/png": "🖼️",
+        "image/gif": "🎞️",
+        "image/webp": "🖼️",
+        "image/bmp": "🖼️",
     }
 
     tab_lib, tab_upload, tab_jobs = st.tabs(["Library", "Upload", "Jobs"])
@@ -1108,7 +1125,7 @@ elif st.session_state.nav == "documents":
 
     # ── Upload tab ────────────────────────────────────────────────────────────
     with tab_upload:
-        st.markdown("Supported formats: **PDF · DOCX · Markdown · TXT · HTML** &nbsp;(max 50 MB each)")
+        st.markdown("Supported formats: **PDF · DOCX · Markdown · TXT · HTML · Images** &nbsp;(max 50 MB each)")
 
         if "uploader_key" not in st.session_state:
             st.session_state.uploader_key = 1
@@ -1123,7 +1140,7 @@ elif st.session_state.nav == "documents":
         with _uploader_slot.container():
             files = st.file_uploader(
                 "Drop files here or click to browse",
-                type=["pdf", "docx", "md", "txt", "html"],
+                type=["pdf", "docx", "md", "txt", "html", "jpg", "jpeg", "png", "gif", "webp", "bmp"],
                 accept_multiple_files=True,
                 label_visibility="collapsed",
                 key=f"uploader_{st.session_state.uploader_key}"
@@ -1320,7 +1337,7 @@ elif st.session_state.nav == "admin":
                     st.markdown(f"""
 <div class="nr-job">
   <span class="nr-job-s {status_cls}">{status_label}</span>
-  <span style="flex:1;color:#e2e8f0;font-weight:600">{owner}</span>
+  <span style="flex:1;color:#000000;font-weight:700;font-size:0.85rem">{owner}</span>
   <span style="color:#6b7280;font-size:.72rem;font-family:monospace">{token_short}</span>
   <span style="color:#4b5563;font-size:.7rem">exp {expires}</span>
 </div>""", unsafe_allow_html=True)
@@ -1352,7 +1369,7 @@ elif st.session_state.nav == "admin":
                 with row_col:
                     st.markdown(f"""
 <div class="nr-job">
-  <span style="flex:1;color:#e2e8f0;font-weight:600">{k.get('owner','')}</span>
+  <span style="flex:1;color:#000000;font-weight:700;font-size:0.85rem">{k.get('owner','')}</span>
   <span style="color:#6b7280;font-size:.72rem">created {created}</span>
   <span style="color:#4b5563;font-size:.7rem">last used {last_used}</span>
 </div>""", unsafe_allow_html=True)
