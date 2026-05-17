@@ -54,7 +54,15 @@ def build_citation_context(hits: list[SearchHit]) -> tuple[str, list[Citation]]:
             f"    Source: {hit.document_title} ({hit.document_source})"
         )
 
-    return "\n\n".join(parts), citations
+    header = (
+        "CITATION RULE: You MUST place [n] immediately after EVERY fact you use from these sources.\n"
+        'Example: "The system uses FastAPI [1] and PostgreSQL [2]."\n\n'
+    )
+    footer = (
+        "\n\nREMINDER: Every factual sentence MUST be immediately followed by [n]. "
+        "A response with no [n] markers is incomplete and invalid."
+    )
+    return header + "\n\n".join(parts) + footer, citations
 
 
 def extract_citations(answer: str, citations: list[Citation]) -> list[Citation]:

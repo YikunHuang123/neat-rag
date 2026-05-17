@@ -105,13 +105,20 @@ def build_agent_context(
     )
 
 
-def _inject_language_directive(question: str) -> str:
+def inject_language_directive(question: str) -> str:
     """
-    Prepend a language directive to reinforce that the model must reply in the
-    same language as the question — needed for weaker local models (e.g. llama3.1)
-    that ignore system-prompt instructions when RAG context is in another language.
+    Prepend language and citation directives into the user message.
+
+    Small local models (e.g. qwen2.5:7b) often ignore long system prompts by
+    the time they generate their answer. Duplicating critical rules here — in
+    the user turn, right before the model calls tools — gives a second,
+    closer-to-generation reinforcement that meaningfully improves compliance.
     """
-    return f"[IMPORTANT: Respond in the same language as this question, regardless of the language of the retrieved context.]\n{question}"
+    return (
+        "[RULE 1: Respond in the same language as this question.]\n"
+        "[RULE 2: After calling a search tool, place [n] citation markers inline immediately after every fact.]\n"
+        f"{question}"
+    )
 
 
 async def run_query(
@@ -149,7 +156,7 @@ async def run_query(
 
     # Prepend explicit language directive so weak local models don't default to a language
     # when retrieved RAG context is in a different language.
-    question = _inject_language_directive(question)
+    question = inject_language_directive(question)
 
     ctx = build_agent_context(session_id, user_id, search_type=search_type)
 
@@ -170,6 +177,9 @@ async def run_query(
     answer: str = result.output
     # Filter only the citations that the agent actually mentioned in its response
     citations = extract_citations(answer, ctx.citations)
+    if not citations and ctx.citations:
+        logger.warning("No citation markers in response; falling back to all retrieved citations", session_id=session_id)
+        citations = ctx.citations
 
     # Persist both sides of the exchange in the session
     async with pg_pool.get_connection() as conn:

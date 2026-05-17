@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic_ai import Agent
 
 from neat_rag.agent.memory import load_history
-from neat_rag.agent.orchestrator import build_agent_context, get_agent, run_query
+from neat_rag.agent.orchestrator import build_agent_context, get_agent, run_query, inject_language_directive
 from neat_rag.agent.prompts import build_system_prompt
 from neat_rag.agent.title import generate_session_title
 from neat_rag.agent.tools import AGENT_TOOLS, AgentContext
@@ -157,7 +157,7 @@ async def chat_stream(
             # incompatible with pydantic-ai's stream reconstruction logic.
             if effective_provider in ["deepseek", "ollama"]:
                 result = await agent.run(
-                    body.message,
+                    inject_language_directive(body.message),
                     deps=ctx,
                     message_history=history,
                 )
@@ -186,6 +186,9 @@ async def chat_stream(
 
         full_answer = "".join(chunks)
         citations = extract_citations(full_answer, ctx.citations)
+        if not citations and ctx.citations:
+            logger.warning("No citation markers in response; falling back to all retrieved citations", session_id=body.session_id)
+            citations = ctx.citations
 
         # Persist both sides of the exchange using a fresh connection.
         async with pg_pool.get_connection() as persist_conn:
