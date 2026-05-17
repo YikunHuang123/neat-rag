@@ -99,7 +99,7 @@ async def verify_api_key(
     except Exception:
         pass
 
-    return key_record.owner
+    return None if settings.DATABASE_SHARED else key_record.owner
 
 
 # ---------------------------------------------------------------------------

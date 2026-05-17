@@ -146,6 +146,9 @@ class Settings(BaseSettings):
     # --- Security & Rate Limiting ---
     # Set ENABLE_AUTH=true in production and issue keys via the /admin/keys endpoint
     ENABLE_AUTH: bool = False
+    # When True, all authenticated users share a single dataset
+    # When False (default), each API key owner sees only their own documents/sessions.
+    DATABASE_SHARED: bool = True
     # slowapi limit strings — see https://limits.readthedocs.io/en/stable/string-notation.html
     RATE_LIMIT_DEFAULT: str = "60/minute"
     RATE_LIMIT_CHAT: str = "10/minute"
