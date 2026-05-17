@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir uv
 WORKDIR /build
 
 # Copy only the dependency manifest first for better layer caching.
-COPY pyproject.toml .
+COPY pyproject.toml README.md ./
 
 # Create a virtual environment and install all project dependencies.
 RUN uv venv /venv && \
@@ -20,7 +20,7 @@ RUN uv venv /venv && \
 COPY src/ src/
 
 # Install the package itself (no-deps because they were already installed).
-RUN uv pip install --python /venv/bin/python --no-deps -e .
+RUN uv pip install --python /venv/bin/python --no-deps .
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -28,12 +28,20 @@ RUN uv pip install --python /venv/bin/python --no-deps -e .
 # ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
-# curl is needed for the Docker healthcheck command.
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/*
+# Install system dependencies for OpenCV (used by Docling) and curl for healthchecks.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    libgl1 \
+    libglib2.0-0 \
+    libxcb1 \
+    libx11-6 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Non-root user for security.
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+RUN addgroup --system appgroup && \
+    adduser --system --ingroup appgroup --home /home/appuser appuser && \
+    mkdir -p /home/appuser && \
+    chown appuser:appgroup /home/appuser
 
 WORKDIR /app
 
@@ -47,7 +55,8 @@ COPY migrations/ /app/migrations/
 
 ENV PATH="/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/home/appuser
 
 USER appuser
 

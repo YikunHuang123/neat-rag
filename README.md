@@ -17,7 +17,6 @@ A production-ready Retrieval-Augmented Generation (RAG) system built with Pydant
 - [Development Phases](#development-phases)
 - [Self-Service API Key Issuance](#self-service-api-key-issuance)
 - [Development & Testing](#development--testing)
-
 ---
 
 ## Features
@@ -85,31 +84,19 @@ cd neat_rag
 cp .env.example .env
 # Edit .env — at minimum set your LLM and embedding provider keys
 
-docker compose up
+# unset DOCKER_CONTENT_TRUST  # On Mac: avoids "No such image" pull bug
+docker compose up -d --build
+
+# Run database migrations
+docker exec -it neat-rag-api alembic upgrade head
 ```
 
-| Service   | URL                     |
-|-----------|-------------------------|
-| API       | http://localhost:8058   |
-| UI        | http://localhost:8501   |
-| API Docs  | http://localhost:8058/docs |
 
 ### First Steps
 
-```bash
-# Upload a document
-curl -X POST http://localhost:8058/documents/upload \
-  -F "file=@your_document.pdf"
-# → {"job_id": "...", "filename": "your_document.pdf"}
-
-# Poll ingestion progress
-curl http://localhost:8058/jobs/{job_id}
-
-# Ask a question
-curl -X POST http://localhost:8058/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "What is this document about?", "search_type": "hybrid"}'
-```
+1. **Open the UI**: Navigate to `http://localhost:8501`.
+2. **Upload documents**.
+3. **start your chat**.
 
 ---
 

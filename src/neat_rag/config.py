@@ -53,7 +53,8 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
 
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    # OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
     OLLAMA_API_KEY: str = "ollama"  # Ollama ignores this, but SDK requires a non-empty string
 
     # --- LLM Configuration ---
@@ -83,7 +84,7 @@ class Settings(BaseSettings):
     # Recommended combinations:
     #   openai : text-embedding-3-small (1536 dim)
     #   gemini : gemini-embedding-001 (1536 dim via MRL, same MTEB as 3072)
-    #   ollama : nomic-embed-text (768 dim)
+    #   ollama : bge-m3 (1024 dim, for multilanguage), nomic-embed-text (768 dim, lite, only for English)
     # Note: gemini-embedding-001 natively outputs 3072 dims but supports Matryoshka
     # truncation to 1536 (no quality loss) or 768 (0.26% loss) — keeps within
     # pgvector HNSW's 2000-dim limit. EMBEDDING_DIM controls output dimensionality.
@@ -91,7 +92,7 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 1536
 
     # Used only when EMBEDDING_PROVIDER="custom"
-    EMBEDDING_BASE_URL: str = ""   
+    EMBEDDING_BASE_URL: str = "http://host.docker.internal:11434/v1"
     EMBEDDING_API_KEY: str = ""    
 
     # --- Chunking Configuration (Ingestion) ---
@@ -100,7 +101,7 @@ class Settings(BaseSettings):
     CHUNKING_MODEL: str = "gemini-embedding-001"
     
     # Custom/Local settings for chunking:
-    CHUNKING_BASE_URL: str = ""
+    CHUNKING_BASE_URL: str = "http://host.docker.internal:11434/v1"
     CHUNKING_API_KEY: str = ""
 
     # --- Reranker Configuration ---

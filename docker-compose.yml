@@ -9,12 +9,6 @@ services:
       - "6334:6334"
     volumes:
       - qdrantdata:/qdrant/storage
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
     restart: unless-stopped
 
   # ── PostgreSQL (supports both metadata and pgvector if needed) ──────────────
@@ -55,14 +49,14 @@ services:
   # ── API (FastAPI + uvicorn) ────────────────────────────────────────────────
   api:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      context: .
+      dockerfile: ./docker/Dockerfile
       target: api
     image: neat-rag-api
     container_name: neat-rag-api
     ports:
       - "${API_PORT:-8058}:8058"
-    env_file: ../.env
+    env_file: ./.env
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -76,7 +70,7 @@ services:
       redis:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8058/health/live"]
       interval: 10s
@@ -88,12 +82,12 @@ services:
   # ── Worker (arq background tasks) ─────────────────────────────────────────
   worker:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      context: .
+      dockerfile: ./docker/Dockerfile
       target: worker
     image: neat-rag-worker
     container_name: neat-rag-worker
-    env_file: ../.env
+    env_file: ./.env
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -107,20 +101,20 @@ services:
       redis:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
 
   # ── UI (Streamlit) ────────────────────────────────────────────────────────
   ui:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      context: .
+      dockerfile: ./docker/Dockerfile
       target: ui
     image: neat-rag-ui
     container_name: neat-rag-ui
     ports:
       - "${UI_PORT:-8501}:8501"
-    env_file: ../.env
+    env_file: ./.env
     environment:
       API_URL: http://api:8058
     depends_on:

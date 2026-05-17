@@ -36,6 +36,14 @@ class PdfExtractor:
             opts.do_table_structure = self._include_tables
             opts.images_scale = self._images_scale
 
+            if self._include_images or self._enable_ocr:
+                logger.info(
+                    "🚀 Initializing Docling models... If this is the first run, it may download ~1GB of weights (SmolVLM/OCR). "
+                    "This might take several minutes depending on your network speed.",
+                    include_images=self._include_images,
+                    enable_ocr=self._enable_ocr
+                )
+
             self._converter = DocumentConverter(
                 format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
             )
