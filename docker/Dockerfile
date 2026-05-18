@@ -12,7 +12,10 @@ WORKDIR /build
 COPY pyproject.toml README.md ./
 
 # Create a virtual environment and install all project dependencies.
-RUN uv venv /venv && \
+# --mount=type=cache keeps downloaded wheels between builds so re-installs are
+# incremental even when pyproject.toml changes.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv /venv && \
     uv pip install --python /venv/bin/python -r pyproject.toml
 
 # Copy source code after dependencies so code edits don't invalidate the
@@ -55,8 +58,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Non-root user for security.
 RUN addgroup --system appgroup && \
     adduser --system --ingroup appgroup --home /home/appuser appuser && \
-    mkdir -p /home/appuser /app/data/images && \
-    chown -R appuser:appgroup /home/appuser /app/data/images
+    mkdir -p /home/appuser /app/data/images /app/data/huggingface && \
+    chown -R appuser:appgroup /home/appuser /app/data/images /app/data/huggingface
 
 WORKDIR /app
 

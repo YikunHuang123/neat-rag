@@ -65,6 +65,8 @@ services:
       QDRANT_PORT: "6333"
       VECTOR_STORE_BACKEND: qdrant
       IMAGE_STORAGE_PATH: /app/data/images
+      HF_HOME: /app/data/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
 
       PYTHONPATH: /app/src
 
@@ -86,6 +88,7 @@ services:
     volumes:
       - ./src:/app/src
       - imgdata:/app/data/images
+      - hf_data:/app/data/huggingface
 
 
   # ── Worker (arq background tasks) ─────────────────────────────────────────
@@ -105,6 +108,8 @@ services:
       QDRANT_PORT: "6333"
       VECTOR_STORE_BACKEND: qdrant
       IMAGE_STORAGE_PATH: /app/data/images
+      HF_HOME: /app/data/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
 
       PYTHONPATH: /app/src
 
@@ -120,6 +125,7 @@ services:
     volumes:
       - ./src:/app/src
       - imgdata:/app/data/images
+      - hf_data:/app/data/huggingface
 
   # ── UI (Streamlit) ────────────────────────────────────────────────────────
   ui:
@@ -157,3 +163,4 @@ volumes:
   redisdata:
   qdrantdata:
   imgdata:
+  hf_data:

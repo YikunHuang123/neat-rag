@@ -167,6 +167,11 @@ class Settings(BaseSettings):
     # DB-backed API keys with scopes=["admin"] grant the same access and can be revoked.
     ADMIN_BOOTSTRAP_KEY: str = "admin"
 
+    # --- Hugging Face ---
+    # Optional: Provide a token to enable higher rate limits and access to private models.
+    # The SDKs (transformers, sentence-transformers) will also pick this up from the environment.
+    HF_TOKEN: str = ""
+
     # When True, all API keys share a single dataset (user_id is never propagated to the DB).
     # When False, each key owner sees only their own documents and sessions.
     DATABASE_SHARED: bool = True
