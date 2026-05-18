@@ -96,10 +96,12 @@ async def list_documents(
     owner: Optional[str] = Depends(verify_api_key),
 ):
     doc_repo = DocumentRepository(conn)
-    docs = await doc_repo.list_documents(limit=limit, offset=offset, user_id=doc_scope(owner))
+    effective_user_id = doc_scope(owner)
+    docs = await doc_repo.list_documents(limit=limit, offset=offset, user_id=effective_user_id)
+    total = await doc_repo.count_documents(user_id=effective_user_id)
     return DocumentListResponse(
         items=[_to_doc_response(d) for d in docs],
-        total=len(docs),
+        total=total,
     )
 
 
