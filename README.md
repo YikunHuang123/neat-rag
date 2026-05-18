@@ -1,714 +1,470 @@
-# Neat-RAG
+# 🔍 Neat-RAG
 
-A production-ready Retrieval-Augmented Generation (RAG) system built with Pydantic AI, FastAPI, and PostgreSQL. Supports multi-provider LLMs and embeddings, hybrid search, automatic citations, multi-turn conversations, and an interactive Streamlit UI.
+**A production-ready Retrieval-Augmented Generation (RAG) backend** that turns private document collections — including **PDF, DOCX, Markdown, HTML, TXT, and images** — into a queryable knowledge base. It offers ultimate flexibility by supporting both **high-performance cloud LLMs** (OpenAI, Gemini, Anthropic, DeepSeek) and **fully private, offline local models** via Ollama. Features include hybrid search, agentic tool routing, automatic inline citations, and a self-service API-key onboarding flow.
 
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [API Reference](#api-reference)
-- [Directory Structure](#directory-structure)
-- [Tech Stack](#tech-stack)
-- [Development Phases](#development-phases)
-- [Self-Service API Key Issuance](#self-service-api-key-issuance)
-- [Development & Testing](#development--testing)
----
-
-## Features
-
-- **Document Ingestion** — PDF, DOCX, Markdown, HTML, TXT with semantic or recursive chunking
-- **Multi-Provider LLMs** — OpenAI, Google Gemini, Anthropic, DeepSeek, Ollama
-- **Multi-Provider Embeddings** — OpenAI, Gemini, Ollama, or any custom OpenAI-compatible endpoint
-- **Hybrid Search** — Semantic vector search + BM25 full-text search with configurable weights
-- **Advanced Retrieval** — HyDE query rewriting, Multi-Query decomposition, Reciprocal Rank Fusion
-- **Smart Reranking** — BGE CrossEncoder (local) or Cohere API
-- **Automatic Citations** — Responses include `[1][2]` references linked to source chunks
-- **Multi-turn Conversations** — Session-based memory with auto-generated titles
-- **Streaming Responses** — Server-Sent Events (SSE) for real-time output
-- **Background Ingestion** — Async job queue with progress tracking via Redis + arq
-- **API Key Auth** — Optional authentication with scoped keys and rate limiting
-- **Self-Service Key Issuance** — Invite-token flow: admin generates a one-time code, user redeems it in the UI to receive their own API key — no account management system required
-- **Web UI** — Interactive Streamlit interface for chat, document management, feedback, and invite management
-- **Evaluation** — Built-in RAGAS metrics for retrieval and generation quality
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+[![Pydantic AI](https://img.shields.io/badge/Pydantic_AI-Agent-E92063)](https://ai.pydantic.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
 ---
 
-## Architecture
+## 📋 Table of Contents
+
+- [Features](#-features)
+- [Demo & Visuals](#-demo--visuals)
+- [Tech Stack](#-tech-stack)
+- [Installation](#-installation)
+- [Usage](#-usage)
+- [Project Structure](#-project-structure)
+- [Contributing](#-contributing)
+- [License & Contact](#-license--contact)
+
+---
+
+## ✨ Features
+
+- **Multi-Format Document Ingestion** — PDF, DOCX, Markdown, HTML, TXT, and images (with Tesseract OCR + VLM descriptions); documents are processed asynchronously via a Redis/arq background worker
+- **Pluggable LLM Providers** — OpenAI, Google Gemini, Anthropic, DeepSeek, and Ollama, all switchable via a single environment variable
+- **Pluggable Embedding Providers** — OpenAI, Gemini, Ollama, or any OpenAI-compatible endpoint; embedding dimension is fully configurable
+- **Hybrid Search** — Combines dense vector retrieval (cosine similarity) with sparse BM25 full-text search; weights are tunable at runtime
+- **Agentic RAG Orchestration** — A Pydantic AI agent selects among `hybrid_search`, `vector_search`, `get_document`, and `list_documents` tools to answer multi-hop questions
+- **Retrieval Techniques** — HyDE query rewriting, Multi-Query decomposition, and Reciprocal Rank Fusion (RRF) for improved recall
+- **Smart Reranking** — Local BGE CrossEncoder or Cohere API reranking to boost precision before the LLM call
+- **Automatic Inline Citations** — Every answer includes `[1][2]` references with direct links back to source chunks and documents
+- **Streaming & Blocking Responses** — SSE streaming (`/chat/stream`) and synchronous (`/chat`) endpoints; both work with conversation memory
+- **Multi-Turn Session Memory** — Session-scoped conversation history with auto-generated titles; full CRUD management via REST API
+- **Dual Vector Store Backends** — Switch between an integrated **pgvector** (PostgreSQL) backend and a dedicated **Qdrant** instance with zero code changes
+- **Background Ingestion Jobs** — Job status and progress tracking via `/jobs/{id}`; the worker runs independently for non-blocking uploads
+- **Self-Service API Key Issuance** — Admins generate single-use invite tokens; users redeem them for personal API keys without manual provisioning
+- **Role-Based Access Control** — `admin`-scoped keys unlock `/admin/*` routes; regular keys are rate-limited via slowapi
+- **RAGAS Evaluation** — Built-in evaluation helpers for Faithfulness, Answer Relevancy, and Context Precision metrics
+- **Streamlit UI** — Chat interface with a document library. Admin interface, user management interface, job monitor, and session sidebar
+
+---
+
+## 🎬 Demo & Visuals
+
+### System Architecture
 
 ```
-┌─────────────┐     ┌──────────────────────────────────────────────────┐
-│  Streamlit  │────▶│                   FastAPI                         │
-│    UI       │     │  /chat  /documents  /sessions  /jobs  /admin  /auth│
-└─────────────┘     └───────────────┬──────────────────────────────────┘
-                                    │
-                    ┌───────────────▼───────────────┐
-                    │          Agent / LLM           │
-                    │  orchestrator → tools → memory │
-                    └───────────────┬───────────────┘
-                                    │
-          ┌─────────────────────────┼─────────────────────────┐
-          │                         │                         │
-┌─────────▼──────────┐  ┌──────────▼──────────┐  ┌──────────▼──────────┐
-│  Ingestion Pipeline │  │  Retrieval System   │  │  Providers          │
-│  extract→chunk→     │  │  vector / hybrid /  │  │  LLM / Embedding /  │
-│  embed→store        │  │  rerank / rewrite   │  │  Reranker           │
-└─────────┬──────────┘  └──────────┬──────────┘  └─────────────────────┘
-          │                         │
-          └────────────┬────────────┘
-                       │
-          ┌────────────▼────────────┐
-          │   PostgreSQL + pgvector  │
-          │   HNSW index + FTS      │
-          └─────────────────────────┘
-          ┌─────────────────────────┐
-          │   Redis + arq worker    │
-          │   (background jobs)     │
-          └─────────────────────────┘
+┌─────────────────┐     REST / SSE      ┌──────────────────────────────────────────┐
+│   Streamlit UI  │ ─────────────────▶  │              FastAPI (port 8058)          │
+│   (port 8501)   │                      │  ┌──────────┐  ┌──────────┐  ┌────────┐ │
+└─────────────────┘                      │  │  /chat   │  │  /docs   │  │ /admin │ │
+                                         │  └────┬─────┘  └────┬─────┘  └────┬───┘ │
+                                         │       │              │              │      │
+                                         │  ┌────▼──────────────▼──────────────▼───┐ │
+                                         │  │          Agent Orchestrator           │ │
+                                         │  │  (Pydantic AI + tool routing)         │ │
+                                         │  └──────┬─────────────────────┬──────────┘ │
+                                         │  ┌──────▼──────┐    ┌─────────▼──────────┐ │
+                                         │  │  Retrieval   │    │   LLM Provider     │ │
+                                         │  │  · Hybrid    │    │  OpenAI / Gemini   │ │
+                                         │  │  · HyDE/MQ   │    │  Anthropic / Ollama│ │
+                                         │  │  · Reranker  │    └────────────────────┘ │
+                                         │  └──────┬───────┘                           │
+                                         └─────────│─────────────────────────────────  ┘
+                                                   │
+                          ┌────────────────────────┼──────────────────────────────┐
+                          │                         │                              │
+                   ┌──────▼──────┐          ┌───────▼──────┐             ┌────────▼──────┐
+                   │  PostgreSQL  │          │    Qdrant     │             │     Redis      │
+                   │  (pgvector)  │          │ (vector store)│             │  (job queue)   │
+                   └─────────────┘          └──────────────┘             └───────────────┘
 ```
+
+### API Key Onboarding Flow
+
+```
+Admin                          New User
+  │                               │
+  │── POST /admin/invites ──▶ [invite token]
+  │                               │
+  │              ◀── POST /auth/redeem ──── {token}
+  │                               │
+  │              ──── {api_key} ──▶
+  │                               │
+  │                        Uses X-API-Key header
+```
+
+> **Screenshots coming soon.** The `docs/` folder will contain terminal session recordings and UI screenshots once uploaded.
 
 ---
 
-## Quick Start
+## 🛠 Tech Stack
 
-### Docker Compose (Recommended)
+| Layer | Technology |
+|---|---|
+| **Language** | Python 3.12 |
+| **API Framework** | FastAPI 0.115 + Uvicorn |
+| **Agent Orchestration** | Pydantic AI (tool-calling agent) |
+| **LLM Providers** | OpenAI, Google Gemini, Anthropic, DeepSeek, Ollama |
+| **Embedding Providers** | OpenAI, Gemini, Ollama, custom OpenAI-compatible |
+| **Vector Store (integrated)** | PostgreSQL 17 + pgvector (HNSW index) |
+| **Vector Store (dedicated)** | Qdrant |
+| **Relational Database** | PostgreSQL 17 via asyncpg |
+| **Full-Text Search** | PostgreSQL `tsvector` / BM25 |
+| **Schema Validation** | Pydantic v2 + pydantic-settings |
+| **DB Migrations** | Alembic |
+| **Background Jobs** | arq + Redis |
+| **Document Parsing** | docling (PDF/DOCX/HTML), python-docx, BeautifulSoup |
+| **OCR** | Tesseract (10+ languages) + OpenCV |
+| **Reranking** | sentence-transformers (BGE CrossEncoder), Cohere API |
+| **Chunking** | LangChain RecursiveCharacterTextSplitter + semantic chunker |
+| **Rate Limiting** | slowapi |
+| **Evaluation** | RAGAS |
+| **UI** | Streamlit |
+| **Containerisation** | Docker + Docker Compose (multi-stage build) |
+
+---
+
+## 🚀 Installation
+
+### Option A — Docker Compose (recommended)
+
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) or Docker Engine + Compose v2.
+
+**1. Clone the repository**
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/YikunHuang123/neat_rag.git
 cd neat_rag
-
-cp .env.example .env
-# Edit .env — at minimum set your LLM and embedding provider keys
-
-# unset DOCKER_CONTENT_TRUST  # On Mac: avoids "No such image" pull bug
-
-# docker compose up -d --build  # first start
-docker compose up -d          # follow-up start command
-
-# Run database migrations
-docker exec -it neat-rag-api alembic upgrade head
 ```
 
+**2. Create your environment file**
 
-### First Steps
+```bash
+cp .env.example .env
+```
 
-1. **Open the UI**: Navigate to `http://localhost:8501`.
-2. **Upload documents**.
-3. **start your chat**.
+Open `.env` and fill in at minimum — choose **one** of the following LLM setups:
+
+**Cloud provider (OpenAI / Gemini / Anthropic / DeepSeek)**
+
+```bash
+# Pick one key that matches your chosen LLM_MODEL
+GEMINI_API_KEY=...
+# DEEPSEEK_API_KEY=...
+# OPENAI_API_KEY=sk-...
+# GEMINI_API_KEY=...
+# ANTHROPIC_API_KEY=...
+
+LLM_PROVIDER=gemini
+LLM_MODEL=gemini-2.5-flash
+
+EMBEDDING_PROVIDER=gemini
+EMBEDDING_MODEL=gemini-embedding-001
+
+# Admin bootstrap key — any secret string you choose
+ADMIN_BOOTSTRAP_KEY=your-very-secret-admin-key
+```
+
+**Local models via Ollama (no API key required)**
+
+```bash
+# Point the app at your local Ollama instance
+LLM_PROVIDER=ollama
+LLM_MODEL=llama3.2          # or any model you have pulled
+LLM_BASE_URL=http://host.docker.internal:11434   # from inside Docker
+# LLM_BASE_URL=http://localhost:11434            # for local dev (Option B)
+
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=nomic-embed-text
+# EMBEDDING_BASE_URL=http://host.docker.internal:11434
+
+# Admin bootstrap key — any secret string you choose
+ADMIN_BOOTSTRAP_KEY=your-very-secret-admin-key
+```
+
+> Make sure Ollama is running and you have pulled the required models:
+> ```bash
+> ollama pull llama3.2
+> ollama pull nomic-embed-text
+> ```
+
+**3. Build and start all services**
+
+```bash
+docker compose up --build
+```
+
+This starts six containers: `postgres`, `qdrant`, `redis`, `api` (port **8058**), `worker`, and `ui` (port **8501**).
+
+**4. Run database migrations**
+
+```bash
+docker compose exec api alembic upgrade head
+```
+
+**5. Open the UI**
+
+Navigate to `http://localhost:8501` in your browser.
+The interactive API docs are at `http://localhost:8058/docs`.
 
 ---
 
-## Installation
+### Option B — Local Development
 
-### Prerequisites
+**Prerequisites:** [Conda](https://docs.conda.io/en/latest/miniconda.html) (Miniconda / Anaconda), PostgreSQL 17 with pgvector, Redis, (optionally) Qdrant.
 
-- Python 3.12
-- Docker & Docker Compose (for PostgreSQL, Redis)
-- An API key for your chosen LLM / embedding provider
-
-### Local Development Setup
+**1. Clone the repository**
 
 ```bash
-# 1. Clone and create virtual environment
-git clone <repo-url>
+git clone https://github.com/YikunHuang123/neat_rag.git
 cd neat_rag
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+```
 
-# 2. Install dependencies
-pip install -e .
+**2. Create and activate a Conda environment**
 
-# 3. Copy and configure environment
+```bash
+conda create -n neat_rag python=3.12 -y
+conda activate neat_rag
+```
+
+**3. Install dependencies**
+
+```bash
+pip install -e ".[dev]"
+```
+
+**4. Configure environment**
+
+```bash
 cp .env.example .env
-# Edit .env with your API keys and settings
+# Edit .env — see the LLM setup options in Option A above
+# At minimum set: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, ADMIN_BOOTSTRAP_KEY
+```
 
-# 4. Start infrastructure services
-docker compose up postgres redis -d
+**5. Apply database migrations**
 
-# 5. Run database migrations
+```bash
 alembic upgrade head
+```
 
-# 6. Start the API server
-uvicorn neat_rag.api:app --reload --port 8058
+**6. Start the API server**
 
-# 7. Start the UI (separate terminal)
+```bash
+uvicorn neat_rag.api:create_app --factory --host 0.0.0.0 --port 8058 --reload
+```
+
+**7. Start the background worker** (separate terminal)
+
+```bash
+arq neat_rag.worker.WorkerSettings
+```
+
+**8. Start the Streamlit UI** (separate terminal, optional)
+
+```bash
 streamlit run src/neat_rag/ui.py
 ```
 
 ---
 
-## Configuration
+## 💡 Usage
 
-All settings are loaded from environment variables (or a `.env` file). See `.env.example` for a full reference.
+### Uploading a document
 
-### Core Settings
-
-| Variable | Default | Description |
-|---|---|---|
-| `APP_ENV` | `development` | `development` or `production` |
-| `LOG_LEVEL` | `INFO` | Logging level |
-| `API_HOST` | `0.0.0.0` | API bind host |
-| `API_PORT` | `8058` | API port |
-
-### Database
-
-| Variable | Default | Description |
-|---|---|---|
-| `DB_HOST` | `localhost` | PostgreSQL host |
-| `DB_PORT` | `5432` | PostgreSQL port |
-| `DB_NAME` | `rag` | Database name |
-| `DB_USER` | `postgres` | Database user |
-| `DB_PASSWORD` | `postgres` | Database password |
-
-### LLM Provider
-
-| Variable | Default | Description |
-|---|---|---|
-| `LLM_PROVIDER` | `deepseek` | `openai` \| `gemini` \| `anthropic` \| `deepseek` \| `ollama` |
-| `LLM_MODEL` | `deepseek-chat` | Model name (e.g. `gpt-4o-mini`, `gemini-2.5-pro`) |
-| `OPENAI_API_KEY` | — | OpenAI API key |
-| `GEMINI_API_KEY` | — | Google Gemini API key |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key |
-| `DEEPSEEK_API_KEY` | — | DeepSeek API key |
-
-### Embedding Provider
-
-| Variable | Default | Description |
-|---|---|---|
-| `EMBEDDING_PROVIDER` | `openai` | `openai` \| `gemini` \| `ollama` \| `custom` |
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
-| `EMBEDDING_DIM` | `1536` | Vector dimension — must match the model |
-| `EMBEDDING_BASE_URL` | — | Custom OpenAI-compatible endpoint |
-
-> **Note:** `EMBEDDING_DIM` must be consistent. OpenAI/Gemini default to 1536; Ollama `nomic-embed-text` uses 768.
-
-### Retrieval & Reranking
-
-| Variable | Default | Description |
-|---|---|---|
-| `ENABLE_RERANK` | `true` | Enable reranking |
-| `RERANKER_PROVIDER` | `cohere` | `bge` (local) \| `cohere` |
-| `RERANKER_MODEL` | `rerank-multilingual-v3.0` | Reranker model name |
-| `COHERE_API_KEY` | — | Cohere API key |
-| `RERANK_TOP_K` | `5` | Top-K results after reranking |
-| `RETRIEVE_CANDIDATE_K` | `25` | Candidate pool size before reranking |
-| `ENABLE_HYDE` | `false` | Enable HyDE query expansion |
-| `ENABLE_MULTI_QUERY` | `false` | Enable Multi-Query decomposition |
-| `MULTI_QUERY_COUNT` | `3` | Number of sub-queries to generate |
-
-### Security
-
-| Variable | Default | Description |
-|---|---|---|
-| `ENABLE_AUTH` | `false` | Require API key authentication |
-| `RATE_LIMIT_DEFAULT` | `60/minute` | Default rate limit |
-| `RATE_LIMIT_CHAT` | `10/minute` | Rate limit for chat endpoints |
-| `CORS_ALLOWED_ORIGINS` | `*` | CORS origins (comma-separated) |
-
-### Example Configurations
-
-<details>
-<summary>OpenAI (LLM + Embeddings)</summary>
-
-```env
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o-mini
-OPENAI_API_KEY=sk-...
-
-EMBEDDING_PROVIDER=openai
-EMBEDDING_MODEL=text-embedding-3-small
-EMBEDDING_DIM=1536
+```bash
+curl -X POST http://localhost:8058/documents/upload \
+  -H "X-API-Key: admin" \   # Defined as ADMIN_BOOTSTRAP_KEY in .env
+  -F "file=@/path/to/report.pdf"
 ```
-</details>
 
-<details>
-<summary>Google Gemini</summary>
-
-```env
-LLM_PROVIDER=gemini
-LLM_MODEL=gemini-2.5-pro
-GEMINI_API_KEY=...
-
-EMBEDDING_PROVIDER=gemini
-EMBEDDING_MODEL=gemini-embedding-001
-EMBEDDING_DIM=1536
-```
-</details>
-
-<details>
-<summary>Fully Local (Ollama)</summary>
-
-```env
-LLM_PROVIDER=ollama
-LLM_MODEL=llama3
-OLLAMA_BASE_URL=http://localhost:11434
-
-EMBEDDING_PROVIDER=ollama
-EMBEDDING_MODEL=nomic-embed-text
-EMBEDDING_DIM=768
-EMBEDDING_BASE_URL=http://localhost:11434
-```
-</details>
-
----
-
-## API Reference
-
-Full interactive documentation is available at `http://localhost:8058/docs`.
-
-### Chat
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/chat` | Blocking chat — returns full response |
-| `POST` | `/chat/stream` | Streaming SSE chat |
-
-**Request body:**
 ```json
 {
-  "message": "What is RAG?",
-  "session_id": "your-session-id",
-  "search_type": "hybrid"
+  "job_id": "3f2a1b...",
+  "document_id": "d9e8c7...",
+  "status": "pending"
 }
 ```
 
-> **Note:** `session_id` is required. Create one first with `POST /sessions`, then reuse it across turns.
+### Checking ingestion progress
 
-**Response:**
+```bash
+curl http://localhost:8058/jobs/3f2a1b... \
+  -H "X-API-Key: admin"   # Defined as ADMIN_BOOTSTRAP_KEY in .env
+```
+
 ```json
 {
-  "content": "RAG stands for ...",
-  "session_id": "abc-123",
+  "job_id": "3f2a1b...",
+  "status": "completed",
+  "progress": 100,
+  "chunks_created": 42
+}
+```
+
+### Asking a question (blocking)
+
+```bash
+curl -X POST http://localhost:8058/chat \
+  -H "X-API-Key: admin" \   # Defined as ADMIN_BOOTSTRAP_KEY in .env
+  -H "Content-Type: application/json" \
+  -d '{"question": "What are the key findings in the report?", "session_id": null}'
+```
+
+```json
+{
+  "answer": "The report highlights three main findings: ... [1][2]",
   "citations": [
-    {
-      "citation_number": 1,
-      "document_title": "RAG Overview",
-      "content_snippet": "..."
-    }
-  ]
+    {"index": 1, "document_id": "d9e8c7...", "chunk_id": "...", "excerpt": "Revenue grew 12%..."},
+    {"index": 2, "document_id": "d9e8c7...", "chunk_id": "...", "excerpt": "Operating margin..."}
+  ],
+  "session_id": "s1a2b3..."
 }
 ```
 
-### Documents
+### Streaming response (SSE)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/documents/upload` | Upload a file for ingestion |
-| `GET` | `/documents` | List all documents |
-| `GET` | `/documents/{id}` | Get document metadata |
-| `PATCH` | `/documents/{id}` | Update document metadata |
-| `DELETE` | `/documents/{id}` | Delete document and its chunks |
-
-### Jobs
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/jobs` | List ingestion jobs |
-| `GET` | `/jobs/{id}` | Get job status and progress |
-
-### Sessions
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/sessions` | Create a new session |
-| `GET` | `/sessions` | List sessions |
-| `GET` | `/sessions/{id}` | Get session metadata |
-| `GET` | `/sessions/{id}/messages` | Get all messages in a session |
-| `DELETE` | `/sessions/{id}` | Delete a session |
-
-### Feedback
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/feedback` | Submit thumbs up/down on a message |
-
-### Admin
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/admin/keys` | Create API key |
-| `GET` | `/admin/keys` | List API keys |
-| `DELETE` | `/admin/keys/{id}` | Revoke API key |
-| `POST` | `/admin/invites` | Generate a one-time invite token |
-| `GET` | `/admin/invites` | List all invite tokens |
-| `DELETE` | `/admin/invites/{id}` | Revoke an invite token |
-
-**Create invite request body:**
-```json
-{
-  "owner": "alice",
-  "expires_in_days": 7
-}
+```bash
+curl -N -X POST http://localhost:8058/chat/stream \
+  -H "X-API-Key: admin" \   # Defined as ADMIN_BOOTSTRAP_KEY in .env
+  -H "Content-Type: application/json" \
+  -d '{"question": "Summarise the methodology section.", "session_id": "s1a2b3..."}'
 ```
 
-### Auth
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/auth/redeem` | Exchange an invite token for a new API key (public, no auth required) |
-
-**Redeem request body:**
-```json
-{ "token": "abc123..." }
+```
+data: {"delta": "The methodology"}
+data: {"delta": " section describes"}
+data: {"delta": " a two-stage process..."}
+data: {"done": true, "citations": [...]}
 ```
 
-**Response** (raw key shown once, never stored):
-```json
-{ "owner": "alice", "raw_key": "nrag_..." }
+### Issuing an invite token (admin)
+
+```bash
+# 1. Admin creates a single-use invite
+curl -X POST http://localhost:8058/admin/invites \
+  -H "X-API-Key: admin"    # Defined as ADMIN_BOOTSTRAP_KEY in .env
+
+# {"token": "inv_abc123...", "expires_at": "2026-06-18T00:00:00Z"}
+
+# 2. New user redeems it for their own API key
+curl -X POST http://localhost:8058/auth/redeem \
+  -H "Content-Type: application/json" \
+  -d '{"token": "inv_abc123..."}'
+
+# {"api_key": "rak_xyz789...", "created_at": "..."}
 ```
 
-### Health
+### Running the test suite
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health/live` | Liveness probe |
-| `GET` | `/health/ready` | Readiness probe (checks DB) |
+```bash
+pytest test_ingestion.py test_agent.py test_phase5.py -v
+```
 
 ---
 
-## Directory Structure
+## 🗂 Project Structure
 
 ```
 neat_rag/
+├── docker-compose.yml          # Six-service stack (postgres, qdrant, redis, api, worker, ui)
+├── docker/
+│   └── Dockerfile              # Multi-stage build — targets: api | worker | ui
+├── alembic.ini                 # Alembic migration configuration
+├── migrations/
+│   └── versions/
+│       ├── 001_initial_schema.py      # Core tables + HNSW index
+│       ├── 002_add_user_id.py
+│       ├── 003_invite_tokens.py
+│       ├── 004_migrate_to_qdrant.py
+│       └── 005_add_user_permissions.py
 ├── src/neat_rag/
-│   ├── config.py               # Settings via pydantic-settings
-│   ├── models.py               # Pydantic domain models
-│   ├── exceptions.py           # Custom exceptions
-│   ├── logger.py               # structlog setup
+│   ├── config.py               # Pydantic Settings — all env vars with defaults
+│   ├── models.py               # Domain models: Document, Chunk, Session, Message, Job…
+│   ├── exceptions.py           # Custom exception hierarchy
 │   ├── eval.py                 # RAGAS evaluation helpers
 │   ├── ui.py                   # Streamlit frontend
-│   │
-│   ├── providers/              # External service factories
-│   │   ├── llm.py              # LLM provider (OpenAI, Gemini, …)
-│   │   ├── embedding.py        # Embedding provider
-│   │   └── reranker.py         # Reranker (BGE / Cohere)
-│   │
-│   ├── ingestion/              # Document processing pipeline
-│   │   ├── extractors.py       # PDF / DOCX / HTML / TXT handlers
-│   │   ├── chunkers.py         # Recursive & semantic chunking
-│   │   └── pipeline.py         # extract → chunk → embed → store
-│   │
-│   ├── retrieval/              # Information retrieval
-│   │   ├── retrievers.py       # VectorRetriever & HybridRetriever
-│   │   ├── rerank.py           # Reranking logic
-│   │   ├── rewrite.py          # HyDE & Multi-Query rewriting
-│   │   └── citation.py         # Citation extraction from responses
-│   │
-│   ├── agent/                  # Agentic RAG orchestration
-│   │   ├── orchestrator.py     # Main run_query() entry point
-│   │   ├── tools.py            # Agent tools (search, get_document, …)
+│   ├── providers/
+│   │   ├── llm.py              # LLM factory (OpenAI / Gemini / Anthropic / DeepSeek / Ollama)
+│   │   ├── embedding.py        # Embedding provider factory
+│   │   └── reranker.py         # BGE CrossEncoder + Cohere reranker
+│   ├── ingestion/
+│   │   ├── extractors.py       # PDF / DOCX / HTML / image text extraction
+│   │   ├── chunkers.py         # Recursive and semantic chunking strategies
+│   │   └── pipeline.py         # Extract → chunk → embed → store orchestration
+│   ├── retrieval/
+│   │   ├── retrievers.py       # VectorRetriever and HybridRetriever
+│   │   ├── rerank.py           # Post-retrieval reranking
+│   │   ├── rewrite.py          # HyDE, Multi-Query, RRF fusion
+│   │   └── citation.py         # Inline citation extraction
+│   ├── agent/
+│   │   ├── orchestrator.py     # run_query() — main public entry point
+│   │   ├── tools.py            # Agent tools + AgentContext (dependency injection)
 │   │   ├── memory.py           # Conversation history management
 │   │   ├── prompts.py          # System prompt templates
-│   │   └── title.py            # Auto session title generation
-│   │
-│   ├── db/                     # Database layer
+│   │   └── title.py            # Auto-generated session titles
+│   ├── db/
 │   │   ├── pool.py             # asyncpg connection pool
+│   │   ├── vector_store.py     # Abstract VectorStoreBase + backend factory
+│   │   ├── pgvector_store.py   # PostgreSQL + pgvector implementation
+│   │   ├── qdrant.py           # Qdrant implementation
 │   │   ├── documents.py        # Document & chunk CRUD
 │   │   ├── sessions.py         # Session & message CRUD
 │   │   ├── jobs.py             # Ingestion job tracking
 │   │   ├── feedback.py         # User feedback CRUD
 │   │   ├── api_keys.py         # API key management
 │   │   └── invites.py          # Invite token CRUD
-│   │
-│   └── api/                    # FastAPI application
-│       ├── __init__.py         # App factory
+│   └── api/
+│       ├── __init__.py         # FastAPI app factory with lifespan management
 │       ├── schemas.py          # Request / response DTOs
-│       ├── deps.py             # FastAPI dependencies
+│       ├── deps.py             # FastAPI Depends factories
 │       ├── middleware.py       # Auth, rate limiting, request tracing
-│       ├── health.py           # Health check endpoints
+│       ├── health.py           # /health/live  &  /health/ready
 │       ├── documents.py        # Document & job routes
-│       ├── chat.py             # Chat routes (blocking & streaming)
-│       ├── sessions.py         # Session routes
-│       ├── feedback.py         # Feedback routes
-│       ├── admin.py            # Admin routes (keys + invites)
-│       └── auth.py             # Public auth routes (redeem invite)
-│
-├── migrations/                 # Alembic migrations
-│   ├── env.py
-│   ├── versions/
-│   │   ├── 001_initial_schema.py   # Tables, HNSW index, FTS
-│   │   └── 002_invite_tokens.py    # invite_tokens table
-│   └── script.py.mako
-│
-├── docker/
-│   └── Dockerfile              # Multi-stage build (api / worker / ui)
-│
-├── docker-compose.yml
-├── alembic.ini
-├── pyproject.toml
-├── .env.example
-├── test_ingestion.py
-├── test_api.py
-├── test_agent.py
-└── test_phase5.py
+│       ├── chat.py             # Blocking and SSE streaming chat
+│       ├── sessions.py         # Session CRUD + message history
+│       ├── feedback.py         # User feedback routes
+│       ├── admin.py            # API key + invite management
+│       └── auth.py             # Public redeem-invite endpoint
+├── test_ingestion.py           # Phase 1 — ingestion pipeline tests
+├── test_agent.py               # Phase 2 — agent orchestration tests
+└── test_phase5.py              # Phase 5 — advanced retrieval tests
 ```
 
 ---
 
-## Tech Stack
+## 🤝 Contributing
 
-| Category | Library / Tool |
-|---|---|
-| **API Framework** | FastAPI 0.116, Uvicorn 0.34 |
-| **AI / Agent** | Pydantic AI 0.7.6, LangChain 0.3 |
-| **LLM Integrations** | langchain-openai, langchain-google-genai, Cohere |
-| **Document Parsing** | Docling 2.48 (PDF), python-docx, trafilatura |
-| **Embeddings** | OpenAI / Gemini / Ollama via OpenAI-compatible API |
-| **Reranking** | sentence-transformers (BGE), Cohere Rerank |
-| **Database** | PostgreSQL 17 + pgvector, asyncpg, Alembic |
-| **Background Jobs** | Redis, arq |
-| **Web UI** | Streamlit 1.49 |
-| **Validation** | Pydantic 2.7, Pydantic Settings |
-| **Rate Limiting** | slowapi |
-| **Logging** | structlog |
-| **Testing** | pytest, pytest-asyncio |
-| **Evaluation** | RAGAS, datasets |
-| **Containerization** | Docker, Docker Compose |
+Contributions, bug reports, and feature requests are welcome.
 
----
+1. **Fork** the repository and create a feature branch:
+   ```bash
+   git checkout -b feat/your-feature-name
+   ```
 
-## Development Phases
+2. **Make your changes** — follow the existing code style (Ruff / Black formatting).
 
-The project was built bottom-up across 9 phases, each with a clear exit criterion:
+3. **Add or update tests** for any new behaviour:
+   ```bash
+   pytest -v
+   ```
 
-```
-Phase 0 ──▶ Phase 1 ──▶ Phase 2 ──▶ Phase 3 ──▶ Phase 4
- Core         Ingest      Converse    REST API    Async jobs
- infra        pipeline    in terminal via HTTP    + progress
+4. **Commit** with a descriptive message:
+   ```bash
+   git commit -m "feat: add XYZ retrieval strategy"
+   ```
 
-Phase 5 ──▶ Phase 6 ──▶ Phase 7 ──▶ Phase 8
- Advanced     Security    Infra       UI +
- retrieval    + auth      + Docker    evaluation
-```
+5. **Open a Pull Request** against `main`. Include:
+   - A clear description of the problem solved
+   - Steps to reproduce (for bug fixes)
+   - Any relevant environment or config changes
 
-### Phase 0 — Core Infrastructure
-
-**Goal:** A solid foundation with no external dependencies.
-
-| File | Purpose |
-|---|---|
-| `config.py` | Centralized settings via `pydantic-settings` — replaces scattered `os.getenv()` calls |
-| `exceptions.py` + `logger.py` | Custom exception hierarchy and `structlog` configuration |
-| `models.py` | Core Pydantic DTOs: `Document`, `Chunk`, `Session`, `Message`, `SearchResult`, `Citation` |
-| `db/pool.py` | asyncpg connection pool with lifecycle management |
-| `db/documents.py`, `db/sessions.py`, `db/jobs.py` | Repository-pattern CRUD split by aggregate root |
-
-### Phase 1 — Ingestion Pipeline
-
-**Goal:** Drop a PDF in, see chunks and vectors appear in the database.
-
-| File | Purpose |
-|---|---|
-| `providers/embedding.py` | Embedding provider abstraction (OpenAI / Gemini / Ollama / custom) |
-| `ingestion/extractors.py` | Per-format text extraction (Docling for PDF, python-docx, trafilatura for HTML) |
-| `ingestion/chunkers.py` | Recursive and semantic chunking strategies |
-| `ingestion/pipeline.py` | Orchestrates extract → chunk → embed → store with atomic DB writes |
-
-**Exit check:** `pipeline.run("doc.pdf")` → `SELECT COUNT(*) FROM chunks` returns rows.
-
-### Phase 2 — Conversation Layer
-
-**Goal:** Ask a question in the terminal; the agent finds the answer from ingested documents.
-
-| File | Purpose |
-|---|---|
-| `retrieval/retrievers.py` | `VectorRetriever` (cosine HNSW) and `HybridRetriever` (70% semantic + 30% BM25) |
-| `providers/llm.py` | LLM factory supporting OpenAI, Gemini, Anthropic, DeepSeek, Ollama |
-| `agent/prompts.py` | Templated system prompt with citation formatting rules |
-| `agent/tools.py` | `AgentContext` + 4 tool functions: `hybrid_search`, `vector_search`, `get_document`, `list_documents` |
-| `agent/memory.py` | Bidirectional conversion between DB `Message` records and pydantic-ai `ModelMessage` objects |
-| `agent/orchestrator.py` | Lazy-loaded singleton `get_agent()` + `run_query(question, session_id)` entry point |
-
-**Key design decisions:** no circular imports (AgentContext lives in `tools.py`); lazy init so API keys aren't required at import time; search tool failures return empty lists (LLM-visible) while document tool failures raise `ToolExecutionError`.
-
-**Exit check:** Terminal script calling `run_query()` returns a grounded answer.
-
-### Phase 3 — REST API Layer
-
-**Goal:** `curl` can upload a file and stream a chat response over HTTP.
-
-| File | Purpose |
-|---|---|
-| `api/schemas.py` | Request / response DTOs (no business logic) |
-| `api/deps.py` | FastAPI `Depends` factories for DB connection, embedder, pipeline |
-| `api/health.py` | `/health/live` + `/health/ready` (real DB ping) |
-| `api/documents.py` | Upload, list, get, patch, delete documents; list/get jobs |
-| `api/chat.py` | Blocking `/chat` and SSE streaming `/chat/stream` |
-| `api/sessions.py` | Session CRUD + message history endpoint |
-| `api/feedback.py` | `POST /feedback` for thumbs up / down |
-| `api/__init__.py` | `create_app()` factory — lifespan, CORS, request-id middleware, exception handlers, router registration |
-
-**Exit check:** `curl -X POST /documents/upload -F file=@doc.pdf` succeeds; streaming chat returns SSE chunks.
-
-### Phase 4 — Async Job Progress
-
-**Goal:** Upload a large file and watch the progress field increment from 0 to 1.
-
-| Change | Detail |
-|---|---|
-| `ingestion/pipeline.py` | Calls `job_repo.update_progress()` at each pipeline stage |
-| `api/documents.py` | Runs pipeline via FastAPI `BackgroundTasks`; returns `job_id` immediately |
-
-> **Note:** The interface for job_id had been pre-wired in Phase 1–3. Phase 4 was mainly filling in the progress update calls — the "upload → poll progress" loop was already functionally closed.
-
-**Exit check:** Upload PDF → receive `job_id` → poll `GET /jobs/{id}` and observe `progress` increasing.
-
-### Phase 5 — Advanced Retrieval
-
-**Goal:** Answers improve noticeably; responses contain `[1][2]` citation markers.
-
-| File | Purpose |
-|---|---|
-| `providers/reranker.py` | `CrossEncoderReranker` (local BGE) and `CohereReranker` with shared factory |
-| `retrieval/rerank.py` | `rerank_hits()` — scores and filters the candidate pool |
-| `retrieval/rewrite.py` | `hyde_rewrite()`, `multi_query_rewrite()`, `rrf_merge()` (Reciprocal Rank Fusion) |
-| `retrieval/citation.py` | `build_citation_context()` + `extract_citations()` — matches `[N]` markers to source chunks |
-| Updated `agent/tools.py` | Advanced search pipeline: rewrite → multi-retrieve → RRF merge → rerank → citation format |
-| Updated `agent/prompts.py` | Strict citation rules: every factual claim must have an inline `[N]` tag |
-| Updated `agent/orchestrator.py` | Injects reranker; `run_query()` now returns a `citations` list |
-| Updated `api/chat.py` + `schemas.py` | Both `/chat` and `/chat/stream` return a `citations` array in the response |
-
-**Exit check:** Compare answer quality before/after; `[1][2]` references appear and map to real chunks.
-
-### Phase 6 — Security & Middleware
-
-**Goal:** Unauthenticated requests return 401; rate-exceeded requests return 429; every request carries a trace ID.
-
-| File | Purpose |
-|---|---|
-| `api/middleware.py` | `slowapi` rate limiter, `APIKeyHeader` scheme, `verify_api_key()` dependency, key hashing utilities |
-| `api/admin.py` | `POST/GET/DELETE /admin/keys` — full API key lifecycle |
-| Updated `api/__init__.py` | Registers `SlowAPIMiddleware` and `RateLimitExceeded` handler |
-| Updated `api/chat.py` | Chat endpoints get `@limiter.limit()` + `Depends(verify_api_key)` |
-| `db/api_keys.py` | `ApiKeyRepository`: create, lookup by hash, touch `last_used_at`, delete, list |
-
-**Modes:** `ENABLE_AUTH=false` (development) — all requests pass through. `ENABLE_AUTH=true` (production) — `X-API-Key: nrag_...` header required.
-
-**Exit check:** Request without key → 401; exceed rate limit → 429.
-
-### Phase 7 — Infrastructure
-
-**Goal:** Fully containerized; database schema is version-controlled and reproducible.
-
-| File | Purpose |
-|---|---|
-| `migrations/versions/001_initial_schema.py` | All 7 tables + HNSW index (replaces IVFFlat) + GIN full-text index; `EMBEDDING_DIM` read from settings |
-| `migrations/env.py` | Connects pydantic Settings → SQLAlchemy; supports offline and online migration modes |
-| `docker/Dockerfile` | Multi-stage build: `builder` (uv install) → `runtime` → `api` / `worker` / `ui` targets |
-| `docker-compose.yml` | Five services (postgres, redis, api, worker, ui) each with `healthcheck` and correct `depends_on` ordering |
-| `.dockerignore` | Excludes `.venv/`, `documents/`, `.env`, test caches |
-
-**Exit check:** `docker compose up` starts all services; `alembic upgrade head` applies cleanly to a fresh database.
-
-### Phase 8 — UI & Evaluation
-
-**Goal:** An interactive web interface and quantitative quality metrics.
-
-| File | Purpose |
-|---|---|
-| `ui.py` | Streamlit frontend — dark theme, session sidebar, document library, job monitor, streaming chat, citations expander, thumbs up/down feedback |
-| `eval.py` | RAGAS evaluation: Faithfulness, Answer Relevancy, Context Precision |
-
-**UI highlights vs. a plain Streamlit app:**
+**Reporting bugs:** Please open a GitHub Issue with the label `bug`, your Python version, and a minimal reproduction snippet.
 
 ---
 
-## Self-Service API Key Issuance
+## 📄 License & Contact
 
-Users can obtain their own API keys through an invite-token flow — no account management system or email service required.
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
 
-### How it works
+**Author:** Yikun Huang
+**Email:** yikun.huang@hotmail.com
+**GitHub:** [@YikunHuang123](https://github.com/YikunHuang123)
 
-| Step | Who | Action |
-|------|-----|--------|
-| 1 | Admin | Opens the **Admin** panel in the UI (or calls `POST /admin/invites`) → generates a one-time token with an owner name and expiry |
-| 2 | Admin | Shares the token with the user via any channel (Slack, email, etc.) |
-| 3 | User | Opens the UI → expands **Redeem invite code** in the Settings sidebar → pastes the token → clicks **Get API Key** |
-| 4 | System | Validates the token, issues a new API key, invalidates the token immediately |
-| 5 | User | Copies the key (shown once), pastes it into the **API Key** field — done |
-
-### Bootstrapping your first admin key
-
-When `ENABLE_AUTH=false` (the development default), the `/admin/*` endpoints require no authentication. Create your first key with:
-
-```bash
-curl -X POST http://localhost:8058/admin/keys \
-  -H "Content-Type: application/json" \
-  -d '{"owner": "admin"}'
-# → { "raw_key": "nrag_...", ... }  — save this, it won't be shown again
-```
-
-Then set `ENABLE_AUTH=true` in `.env` before going to production.
-
-### New files
-
-| File | Purpose |
-|------|---------|
-| `db/invites.py` | `InviteTokenRepository` — create, lookup, mark used, delete, list |
-| `api/auth.py` | `POST /auth/redeem` — public endpoint, no auth required |
-| `api/admin.py` | Extended with `POST/GET/DELETE /admin/invites` |
-| `migrations/002_invite_tokens.py` | Adds the `invite_tokens` table |
-
----
-
-## Development & Testing
-
-### Running Tests
-
-```bash
-# Ingestion pipeline
-pytest test_ingestion.py -v
-
-# Agent orchestration
-pytest test_agent.py -v
-
-# Advanced retrieval (rerank, citations)
-pytest test_phase5.py -v
-```
-
-### Database Migrations
-
-```bash
-# Apply all migrations
-alembic upgrade head
-
-# Create a new migration
-alembic revision --autogenerate -m "description"
-
-# Rollback one step
-alembic downgrade -1
-```
-
-### Evaluation
-
-```bash
-# Run with built-in demo questions (requires indexed documents)
-python -m neat_rag.eval --demo
-
-# Run against a custom question file
-python -m neat_rag.eval --questions eval/questions.json --output report.json
-
-# Against a deployed instance with auth
-python -m neat_rag.eval --questions qa.json --api-url http://prod:8058 --api-key nrag_...
-```
-
-Metrics reported: **Faithfulness**, **Answer Relevancy**, **Context Precision** (via RAGAS).
-
-### Docker Build Targets
-
-The `docker/Dockerfile` uses build targets to produce separate images:
-
-```bash
-# API server
-docker build -f docker/Dockerfile --target api -t neat-rag-api .
-
-# Background worker
-docker build -f docker/Dockerfile --target worker -t neat-rag-worker .
-
-# Streamlit UI
-docker build -f docker/Dockerfile --target ui -t neat-rag-ui .
-```
+> Built as a full-stack RAG engineering showcase — covering async API design, agentic LLM orchestration, hybrid retrieval, and production-grade containerisation.

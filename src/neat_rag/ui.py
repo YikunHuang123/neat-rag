@@ -618,7 +618,7 @@ def _is_likely_downloading(job: Dict) -> bool:
         return False
 
 
-# ── Jobs panel (fragment — auto-refreshes every 3 s while page is open) ───────
+# ── Tasks panel (fragment — auto-refreshes every 3 s while page is open) ───────
 @st.fragment(run_every=3)
 def _jobs_panel():
     jcol, rjcol, cjcol = st.columns([4, 1, 1])
@@ -626,7 +626,7 @@ def _jobs_panel():
         if st.button("⟳ Refresh", key="ref_jobs", use_container_width=True):
             st.rerun(scope="fragment")
     with cjcol:
-        if st.button("🗑 Clear", key="clr_jobs", use_container_width=True, help="Clear all ingestion jobs"):
+        if st.button("🗑 Clear", key="clr_jobs", use_container_width=True, help="Clear all background tasks"):
             _api("delete", "/jobs", silent=True)
             st.rerun(scope="fragment")
 
@@ -639,10 +639,10 @@ def _jobs_panel():
             ' &nbsp;<span style="color:#34D399;font-size:0.7rem;font-weight:700">● Live</span>'
             if has_active else ""
         )
-        st.markdown(f"**{len(jobs)}** recent job(s){live_badge}", unsafe_allow_html=True)
+        st.markdown(f"**{len(jobs)}** recent task(s){live_badge}", unsafe_allow_html=True)
 
     if not jobs:
-        st.info("No ingestion jobs yet.")
+        st.info("No background tasks yet.")
     else:
         for job in jobs:
             status = job.get("status", "pending")
@@ -1097,7 +1097,7 @@ elif st.session_state.nav == "documents":
         "image/bmp": "🖼️",
     }
 
-    tab_lib, tab_upload, tab_jobs = st.tabs(["Library", "Upload", "Jobs"])
+    tab_lib, tab_upload, tab_tasks = st.tabs(["Library", "Upload", "Tasks"])
 
     # ── Library tab ───────────────────────────────────────────────────────────
     with tab_lib:
@@ -1272,8 +1272,8 @@ elif st.session_state.nav == "documents":
             st.session_state.uploader_key += 1
             st.rerun()
 
-    # ── Jobs tab ──────────────────────────────────────────────────────────────
-    with tab_jobs:
+    # ── Tasks tab ─────────────────────────────────────────────────────────────
+    with tab_tasks:
         _jobs_panel()
 
 
