@@ -7,7 +7,7 @@ import asyncpg
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, Response
 
 from neat_rag.api.deps import get_connection, get_pipeline, get_store
-from neat_rag.api.middleware import verify_api_key
+from neat_rag.api.middleware import doc_scope, verify_api_key
 from neat_rag.api.schemas import (
     DocumentListResponse,
     DocumentResponse,
@@ -96,7 +96,7 @@ async def list_documents(
     owner: Optional[str] = Depends(verify_api_key),
 ):
     doc_repo = DocumentRepository(conn)
-    docs = await doc_repo.list_documents(limit=limit, offset=offset, user_id=owner)
+    docs = await doc_repo.list_documents(limit=limit, offset=offset, user_id=doc_scope(owner))
     return DocumentListResponse(
         items=[_to_doc_response(d) for d in docs],
         total=len(docs),
@@ -110,7 +110,7 @@ async def get_document(
     owner: Optional[str] = Depends(verify_api_key),
 ):
     doc_repo = DocumentRepository(conn)
-    doc = await doc_repo.get_document(document_id, user_id=owner)
+    doc = await doc_repo.get_document(document_id, user_id=doc_scope(owner))
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
     return _to_doc_response(doc)

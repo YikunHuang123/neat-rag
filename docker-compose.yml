@@ -65,6 +65,9 @@ services:
       QDRANT_PORT: "6333"
       VECTOR_STORE_BACKEND: qdrant
       IMAGE_STORAGE_PATH: /app/data/images
+
+      PYTHONPATH: /app/src
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,6 +105,9 @@ services:
       QDRANT_PORT: "6333"
       VECTOR_STORE_BACKEND: qdrant
       IMAGE_STORAGE_PATH: /app/data/images
+
+      PYTHONPATH: /app/src
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,6 +134,9 @@ services:
     env_file: ./.env
     environment:
       API_URL: http://api:8058
+
+      PYTHONPATH: /app/src
+
     depends_on:
       api:
         condition: service_healthy

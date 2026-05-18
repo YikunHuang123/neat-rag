@@ -6,9 +6,12 @@ Three responsibilities:
 3. Helper utilities        — key generation, hashing
 
 Auth model (no on/off flag — always active):
-  - No key supplied  → anonymous access (user_id=None, shared data)
-  - Regular key      → authenticated user; isolated data unless DATABASE_SHARED=True
+  - No key supplied  → anonymous access (user_id=None)
+  - Regular key      → authenticated user; owner string always returned
   - ADMIN_BOOTSTRAP_KEY or key with scopes=["admin"] → admin endpoints allowed
+
+DATABASE_SHARED only affects document/vector queries, NOT sessions or jobs.
+Use doc_scope(owner) at the call site for document reads and vector searches.
 
 Request-ID injection lives in api/__init__.py as an HTTP middleware since it
 must wrap every request including rate-limited/auth-rejected ones.
@@ -64,18 +67,39 @@ def generate_api_key() -> tuple[str, str]:
     return raw, hash_api_key(raw)
 
 
+def doc_scope(owner: Optional[str]) -> Optional[str]:
+    """
+    Return the user_id to use for document/vector read queries.
+
+    When DATABASE_SHARED=True, returns None so queries span all users' documents.
+    When False, returns the real owner for strict isolation.
+
+    Apply this at the call site for document reads and vector searches.
+    Do NOT use for sessions, jobs, or write operations — those always use the real owner.
+    """
+    return None if settings.DATABASE_SHARED else owner
+
+
 async def verify_api_key(
     raw_key: Optional[str] = Security(_api_key_header),
 ) -> Optional[str]:
     """
     FastAPI dependency for regular endpoints.
 
-    - No key supplied → returns None (anonymous / shared-dataset access).
-    - Invalid key     → raises 401.
-    - Valid key       → returns owner string, or None when DATABASE_SHARED=True.
+    - No key supplied → 401 (key required).
+    - ADMIN_BOOTSTRAP_KEY → returns "__bootstrap__" (admin identity, no DB lookup).
+    - Valid DB key        → returns the key owner string.
+    - Invalid key         → 401.
+
+    Sessions and jobs use this value directly for strict per-user isolation.
+    Document/vector queries should wrap the result with doc_scope(owner).
     """
     if not raw_key:
-        return None  # anonymous — treated as shared user
+        raise HTTPException(status_code=401, detail="API key required")
+
+    # Operator bootstrap key — fast path, no DB roundtrip
+    if settings.ADMIN_BOOTSTRAP_KEY and raw_key == settings.ADMIN_BOOTSTRAP_KEY:
+        return "__bootstrap__"
 
     hashed = hash_api_key(raw_key)
 
@@ -95,7 +119,7 @@ async def verify_api_key(
     except Exception:
         pass
 
-    return None if settings.DATABASE_SHARED else key_record.owner
+    return key_record.owner
 
 
 async def verify_admin(
@@ -104,11 +128,11 @@ async def verify_admin(
     """
     FastAPI dependency for admin-only endpoints.
 
-    Accepts either:
-    - ADMIN_BOOTSTRAP_KEY (static env-var operator key, no DB lookup required)
-    - Any API key with "admin" in its scopes
-
-    Raises 403 for everything else, including missing keys.
+    - No key        → 403 (admin key required).
+    - Bootstrap key → pass (operator identity).
+    - Invalid key   → 401 (lets UI distinguish invalid from non-admin).
+    - Valid non-admin key → 403.
+    - Valid admin key     → returns owner.
     """
     if not raw_key:
         raise HTTPException(status_code=403, detail="Admin key required")
@@ -123,8 +147,11 @@ async def verify_admin(
         repo = ApiKeyRepository(conn)
         key_record = await repo.get_key_by_hash(hashed)
 
-    if key_record is None or "admin" not in key_record.scopes:
-        logger.warning("Unauthorized admin access attempt", hashed_prefix=hashed[:8])
+    if key_record is None:
+        logger.warning("Unauthorized admin access attempt (invalid key)", hashed_prefix=hashed[:8])
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    if "admin" not in key_record.scopes:
         raise HTTPException(status_code=403, detail="Admin access required")
 
     try:

@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     ADMIN_BOOTSTRAP_KEY: str = "admin"
     # When True, all users share a single dataset (user_id never propagated to DB layer).
     # When False (default), each API key owner sees only their own documents/sessions.
-    DATABASE_SHARED: bool = False
+    DATABASE_SHARED: bool = True
     # slowapi limit strings — see https://limits.readthedocs.io/en/stable/string-notation.html
     RATE_LIMIT_DEFAULT: str = "60/minute"
     RATE_LIMIT_CHAT: str = "10/minute"

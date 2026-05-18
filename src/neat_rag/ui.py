@@ -336,6 +336,8 @@ _DEFAULTS: Dict[str, Any] = {
     "_health_ts": 0.0,
     "_sessions_dirty": True,
     "current_user": None,
+    "api_key_valid": None,   # None=unknown, True=valid, False=invalid
+    "is_admin": False,       # True when current key has admin access
     "_redeemed_key": None,
     "_invite_token_result": None,
     "session_page": 1,
@@ -401,17 +403,30 @@ def _health() -> bool:
 
 
 
+def _require_auth():
+    """Gate: stop rendering if user has no key or an invalid key."""
+    if not st.session_state.api_key:
+        st.info("Enter your API key in the **Account** section of the sidebar to get started.")
+        st.stop()
+    if st.session_state.api_key_valid is False and st.session_state.api_online:
+        st.error("Your API key is invalid — please check the **Account** section.")
+        st.stop()
+
+
 def _refresh_sessions():
     size = st.session_state.session_page_size
     offset = (st.session_state.session_page - 1) * size
     data = _api("get", f"/sessions?limit={size}&offset={offset}", silent=True)
-    if data:
+    if data is not None:
+        st.session_state.api_key_valid = True
         st.session_state.sessions = data.get("items", [])
         st.session_state.session_total = data.get("total", 0)
     else:
+        if st.session_state.api_online:
+            st.session_state.api_key_valid = False
         st.session_state.sessions = []
         st.session_state.session_total = 0
-    
+
     if st.session_state.sessions and not st.session_state.current_user:
         st.session_state.current_user = st.session_state.sessions[0].get("user_id")
     st.session_state._sessions_dirty = False
@@ -660,12 +675,15 @@ with st.sidebar:
   </div>
 </div>""", unsafe_allow_html=True)
     with hcol2:
-        # Show admin button only if the current key passes the admin probe
-        show_admin = False
-        if st.session_state.api_key:
+        # Probe admin access once per key (cached in is_admin until key changes)
+        if st.session_state.api_key and st.session_state.api_key_valid is None:
             res = _api("get", "/admin/keys", silent=True)
-            if res is not None:
-                show_admin = True
+            st.session_state.is_admin = res is not None
+            if st.session_state.is_admin:
+                st.session_state.api_key_valid = True  # admin key is always valid
+        elif not st.session_state.api_key:
+            st.session_state.is_admin = False
+        show_admin = st.session_state.is_admin
 
         if show_admin:
             if st.button(
@@ -693,6 +711,8 @@ with st.sidebar:
     )
     if new_key != st.session_state.api_key:
         st.session_state.api_key = new_key.strip()
+        st.session_state.api_key_valid = None
+        st.session_state.is_admin = False
         st.session_state.sessions = []
         st.session_state.current_session_id = None
         st.session_state.messages = []
@@ -705,12 +725,12 @@ with st.sidebar:
         st.rerun()
 
     if st.session_state.api_key:
-        # Only show as authenticated if we actually got a user back from the API
-        if st.session_state.current_user:
-            st.caption(f"👤 {st.session_state.current_user}")
-        else:
-            # We have a key, but haven't successfully fetched sessions/user yet
-            st.caption("🔴 Unverified")
+        if show_admin:
+            st.caption("👑 Admin")
+        elif st.session_state.api_key_valid:
+            st.caption(f"👤 {st.session_state.current_user or 'Verified'}")
+        elif st.session_state.api_key_valid is False:
+            st.caption("🔴 Invalid key")
     else:
         st.caption("Have an invite code? Exchange it for an API key.")
         with st.expander("🎟  Redeem invite code", expanded=True):
@@ -773,16 +793,23 @@ with st.sidebar:
     if st.session_state.nav == "chat":
         st.markdown('<div class="nr-section">Sessions</div>', unsafe_allow_html=True)
 
-        if st.button("＋  New session", use_container_width=True):
-            sess = _create_session()
-            if sess:
-                st.session_state.current_session_id = sess["id"]
-                st.session_state.messages = []
-                _refresh_sessions()
-                st.rerun()
+        if not st.session_state.api_key:
+            # No key: wipe any stale cached sessions immediately
+            st.session_state.sessions = []
+            st.session_state.session_total = 0
+            st.session_state.current_user = None
+        else:
+            if st.button("＋  New session", use_container_width=True):
+                sess = _create_session()
+                if sess:
+                    st.session_state.current_session_id = sess["id"]
+                    st.session_state.messages = []
+                    _refresh_sessions()
+                    st.rerun()
 
-        if st.session_state._sessions_dirty:
-            _refresh_sessions()
+            # Refresh if dirty OR if we haven't verified this key yet (first render)
+            if st.session_state._sessions_dirty or st.session_state.api_key_valid is None:
+                _refresh_sessions()
 
         for s in st.session_state.sessions:
             is_active = (s["id"] == st.session_state.current_session_id)
@@ -930,28 +957,30 @@ with st.sidebar:
         if _active_model:
             st.caption(f"Using **{_active_model}** via {_PROVIDER_OPTS[_sel_provider]}")
 
-    # ── Connection ────────────────────────────────────────────────────────────
-    with st.expander("Connection", expanded=False):
-        new_url = st.text_input(
-            "API URL", value=st.session_state.api_url,
-            placeholder="http://localhost:8058", label_visibility="collapsed",
-        )
-        if new_url != st.session_state.api_url:
-            st.session_state.api_url = new_url.strip()
-            st.session_state.session_page = 1
-            st.session_state._sessions_dirty = True
-            st.session_state._health_ts = 0.0
-            st.rerun()
+    # ── Connection (admin only) ───────────────────────────────────────────────
+    if show_admin:
+        with st.expander("Connection", expanded=False):
+            new_url = st.text_input(
+                "API URL", value=st.session_state.api_url,
+                placeholder="http://localhost:8058", label_visibility="collapsed",
+            )
+            if new_url != st.session_state.api_url:
+                st.session_state.api_url = new_url.strip()
+                st.session_state.session_page = 1
+                st.session_state._sessions_dirty = True
+                st.session_state._health_ts = 0.0
+                st.rerun()
 
-        if st.button("⟳  Refresh status", use_container_width=True):
-            st.session_state._health_ts = 0.0
-            st.session_state.session_page = 1
-            st.session_state._sessions_dirty = True
-            st.rerun()
+            if st.button("⟳  Refresh status", use_container_width=True):
+                st.session_state._health_ts = 0.0
+                st.session_state.session_page = 1
+                st.session_state._sessions_dirty = True
+                st.rerun()
 
 
 # ── Chat page ─────────────────────────────────────────────────────────────────
 if st.session_state.nav == "chat":
+    _require_auth()
     sid = st.session_state.current_session_id
 
     if sid is None:
@@ -1028,6 +1057,7 @@ if st.session_state.nav == "chat":
 
 # ── Documents page ────────────────────────────────────────────────────────────
 elif st.session_state.nav == "documents":
+    _require_auth()
     st.markdown("## Document Library")
 
     _MIME_ICON = {

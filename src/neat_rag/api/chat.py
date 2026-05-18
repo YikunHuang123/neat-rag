@@ -13,7 +13,7 @@ from neat_rag.agent.prompts import build_system_prompt
 from neat_rag.agent.title import generate_session_title
 from neat_rag.agent.tools import AGENT_TOOLS, AgentContext
 from neat_rag.api.deps import get_connection
-from neat_rag.api.middleware import limiter, verify_api_key
+from neat_rag.api.middleware import doc_scope, limiter, verify_api_key
 from neat_rag.api.schemas import ChatRequest, ChatResponse, CitationResponse
 from neat_rag.config import settings
 from neat_rag.db.pool import pg_pool
@@ -80,7 +80,7 @@ async def chat(
     answer, citations = await run_query(
         body.message,
         body.session_id,
-        user_id=owner,
+        user_id=doc_scope(owner),
         search_type=body.search_type,
         agent_override=override_agent,
     )
@@ -147,7 +147,7 @@ async def chat_stream(
         else:
             agent = _default_agent
 
-        ctx = build_agent_context(body.session_id, user_id=owner, search_type=body.search_type)
+        ctx = build_agent_context(body.session_id, user_id=doc_scope(owner), search_type=body.search_type)
         # Determine the effective provider to decide whether streaming is supported.
         effective_provider = (body.llm_provider or settings.LLM_PROVIDER).lower()
 

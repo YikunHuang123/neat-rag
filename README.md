@@ -663,9 +663,6 @@ Then set `ENABLE_AUTH=true` in `.env` before going to production.
 # Ingestion pipeline
 pytest test_ingestion.py -v
 
-# API endpoints
-pytest test_api.py -v
-
 # Agent orchestration
 pytest test_agent.py -v
 
