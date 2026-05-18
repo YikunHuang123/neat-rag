@@ -17,7 +17,7 @@ from neat_rag.logger import get_logger
 
 logger = get_logger(__name__)
 
-def build_citation_context(hits: list[SearchHit]) -> tuple[str, list[Citation]]:
+def build_citation_context(hits: list[SearchHit], offset: int = 0) -> tuple[str, list[Citation]]:
     """
     Format a list of SearchHits into a cited context block for the agent.
 
@@ -25,12 +25,18 @@ def build_citation_context(hits: list[SearchHit]) -> tuple[str, list[Citation]]:
         [n] <chunk content>
             Source: <document_title> (<document_source>)
 
-    The citation numbers are sequential starting from 1 and correspond
-    directly to the position of each hit in the input list.
+    Numbers start from offset+1 so that successive calls within the same
+    session produce a single monotonically-increasing sequence rather than
+    resetting to [1] each time.
+
+    Args:
+        hits:   Search hits to format.
+        offset: Number of citations already accumulated (pass
+                ``len(ctx.deps.citations)`` before extending the list).
 
     Returns:
         (formatted_context_string, citations)
-        where citations[i].citation_number == i + 1.
+        where citations[i].citation_number == offset + i + 1.
     """
     if not hits:
         return "", []
@@ -38,7 +44,7 @@ def build_citation_context(hits: list[SearchHit]) -> tuple[str, list[Citation]]:
     citations: list[Citation] = []
     parts: list[str] = []
 
-    for i, hit in enumerate(hits, start=1):
+    for i, hit in enumerate(hits, start=offset + 1):
         citations.append(
             Citation(
                 citation_number=i,

@@ -143,8 +143,9 @@ async def _run_advanced_search(
         if not hits:
             return "No relevant information found in the knowledge base."
 
-        # 5. Citation Formatting
-        context_str, citations = build_citation_context(hits)
+        # 5. Citation Formatting — start numbering after already-accumulated citations
+        offset = len(ctx.deps.citations)
+        context_str, citations = build_citation_context(hits, offset=offset)
         ctx.deps.citations.extend(citations)
 
         return context_str

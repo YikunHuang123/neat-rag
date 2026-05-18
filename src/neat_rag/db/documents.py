@@ -89,6 +89,34 @@ class DocumentRepository:
             logger.error("Failed to list documents", error=str(e))
             raise DatabaseError(f"Failed to list documents: {e}")
 
+    async def count_documents(
+        self,
+        metadata_filter: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+    ) -> int:
+        """Return the total number of documents matching the given filters."""
+        query = "SELECT COUNT(*) FROM documents"
+        params: list = []
+        conditions: list = []
+
+        if user_id is not None:
+            params.append(user_id)
+            conditions.append(f"user_id = ${len(params)}")
+
+        if metadata_filter:
+            params.append(json.dumps(metadata_filter))
+            conditions.append(f"metadata @> ${len(params)}::jsonb")
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        try:
+            val = await self.conn.fetchval(query, *params)
+            return int(val or 0)
+        except Exception as e:
+            logger.error("Failed to count documents", error=str(e))
+            raise DatabaseError(f"Failed to count documents: {e}")
+
     async def save_document(self, document: Document) -> None:
         """
         Insert or update a document record only (no chunks).
