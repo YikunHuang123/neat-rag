@@ -5,6 +5,11 @@ Three responsibilities:
 2. Rate limiting           — slowapi, configurable limits per endpoint group
 3. Helper utilities        — key generation, hashing
 
+Auth model (no on/off flag — always active):
+  - No key supplied  → anonymous access (user_id=None, shared data)
+  - Regular key      → authenticated user; isolated data unless DATABASE_SHARED=True
+  - ADMIN_BOOTSTRAP_KEY or key with scopes=["admin"] → admin endpoints allowed
+
 Request-ID injection lives in api/__init__.py as an HTTP middleware since it
 must wrap every request including rate-limited/auth-rejected ones.
 """
@@ -63,23 +68,14 @@ async def verify_api_key(
     raw_key: Optional[str] = Security(_api_key_header),
 ) -> Optional[str]:
     """
-    FastAPI dependency — verify the X-API-Key header.
+    FastAPI dependency for regular endpoints.
 
-    - If ENABLE_AUTH is False, always passes (returns None).
-    - If the header is missing or the key is unknown, raises 401.
-    - On success returns the key owner string.
-
-    Usage::
-
-        @router.get("/protected")
-        async def endpoint(owner: str = Depends(verify_api_key)):
-            ...
+    - No key supplied → returns None (anonymous / shared-dataset access).
+    - Invalid key     → raises 401.
+    - Valid key       → returns owner string, or None when DATABASE_SHARED=True.
     """
-    if not settings.ENABLE_AUTH:
-        return None
-
     if not raw_key:
-        raise HTTPException(status_code=401, detail="Missing X-API-Key header")
+        return None  # anonymous — treated as shared user
 
     hashed = hash_api_key(raw_key)
 
@@ -100,6 +96,45 @@ async def verify_api_key(
         pass
 
     return None if settings.DATABASE_SHARED else key_record.owner
+
+
+async def verify_admin(
+    raw_key: Optional[str] = Security(_api_key_header),
+) -> Optional[str]:
+    """
+    FastAPI dependency for admin-only endpoints.
+
+    Accepts either:
+    - ADMIN_BOOTSTRAP_KEY (static env-var operator key, no DB lookup required)
+    - Any API key with "admin" in its scopes
+
+    Raises 403 for everything else, including missing keys.
+    """
+    if not raw_key:
+        raise HTTPException(status_code=403, detail="Admin key required")
+
+    # Operator bootstrap key — fast path, no DB roundtrip
+    if settings.ADMIN_BOOTSTRAP_KEY and raw_key == settings.ADMIN_BOOTSTRAP_KEY:
+        return "__bootstrap__"
+
+    hashed = hash_api_key(raw_key)
+
+    async with pg_pool.get_connection() as conn:
+        repo = ApiKeyRepository(conn)
+        key_record = await repo.get_key_by_hash(hashed)
+
+    if key_record is None or "admin" not in key_record.scopes:
+        logger.warning("Unauthorized admin access attempt", hashed_prefix=hashed[:8])
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    try:
+        async with pg_pool.get_connection() as conn:
+            repo = ApiKeyRepository(conn)
+            await repo.touch_last_used(hashed)
+    except Exception:
+        pass
+
+    return key_record.owner
 
 
 # ---------------------------------------------------------------------------

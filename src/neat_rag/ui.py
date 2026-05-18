@@ -338,7 +338,6 @@ _DEFAULTS: Dict[str, Any] = {
     "current_user": None,
     "_redeemed_key": None,
     "_invite_token_result": None,
-    "_auth_mode": None,  # "open" | "auth" | None (not yet detected)
     "session_page": 1,
     "session_page_size": 10,
     "session_total": 0,
@@ -400,21 +399,6 @@ def _health() -> bool:
     st.session_state._health_ts = now
     return ok
 
-
-def _detect_open_mode() -> str:
-    """Detect whether the server runs without authentication. Cached per session."""
-    if st.session_state._auth_mode is not None:
-        return st.session_state._auth_mode
-    if not st.session_state.api_online:
-        return "auth"
-    try:
-        with httpx.Client(timeout=3) as c:
-            r = c.get(st.session_state.api_url.rstrip("/") + "/admin/keys")
-        mode = "open" if r.status_code == 200 else "auth"
-    except Exception:
-        mode = "auth"
-    st.session_state._auth_mode = mode
-    return mode
 
 
 def _refresh_sessions():
@@ -676,14 +660,9 @@ with st.sidebar:
   </div>
 </div>""", unsafe_allow_html=True)
     with hcol2:
-        # Only show admin button if:
-        # 1. We are in dev mode (no auth) OR
-        # 2. We have a key and it successfully passes an admin-only API check
+        # Show admin button only if the current key passes the admin probe
         show_admin = False
-        if _detect_open_mode() == "open":
-            show_admin = True
-        elif st.session_state.api_key:
-            # Silent check: if this fails, we just don't show the button
+        if st.session_state.api_key:
             res = _api("get", "/admin/keys", silent=True)
             if res is not None:
                 show_admin = True
@@ -733,40 +712,34 @@ with st.sidebar:
             # We have a key, but haven't successfully fetched sessions/user yet
             st.caption("🔴 Unverified")
     else:
-        auth_mode = _detect_open_mode()
-        if auth_mode == "open":
-            # Server requires no auth (ENABLE_AUTH=false)
-            st.info("Dev mode — no API key required.", icon="ℹ️")
-        else:
-            # Auth required — surface the invite redemption prominently
-            st.caption("Have an invite code? Exchange it for an API key.")
-            with st.expander("🎟  Redeem invite code", expanded=True):
-                invite_code = st.text_input(
-                    "Invite code", placeholder="Paste your invite code here",
-                    label_visibility="collapsed", key="_invite_input",
-                )
-                if st.button("Get API Key", use_container_width=True, type="primary"):
-                    if not invite_code.strip():
-                        st.warning("Please enter an invite code.")
-                    else:
-                        try:
-                            with httpx.Client(timeout=10) as c:
-                                resp = c.post(
-                                    st.session_state.api_url.rstrip("/") + "/auth/redeem",
-                                    json={"token": invite_code.strip()},
-                                )
-                            if resp.status_code == 201:
-                                data = resp.json()
-                                st.session_state._redeemed_key = data["raw_key"]
-                                st.rerun()
-                            elif resp.status_code == 404:
-                                st.error("Invite code not found.")
-                            elif resp.status_code == 410:
-                                st.error(resp.json().get("detail", "Invite code is no longer valid."))
-                            else:
-                                st.error(f"Error {resp.status_code}: {resp.text}")
-                        except Exception as exc:
-                            st.error(f"Could not reach the API — {exc}")
+        st.caption("Have an invite code? Exchange it for an API key.")
+        with st.expander("🎟  Redeem invite code", expanded=True):
+            invite_code = st.text_input(
+                "Invite code", placeholder="Paste your invite code here",
+                label_visibility="collapsed", key="_invite_input",
+            )
+            if st.button("Get API Key", use_container_width=True, type="primary"):
+                if not invite_code.strip():
+                    st.warning("Please enter an invite code.")
+                else:
+                    try:
+                        with httpx.Client(timeout=10) as c:
+                            resp = c.post(
+                                st.session_state.api_url.rstrip("/") + "/auth/redeem",
+                                json={"token": invite_code.strip()},
+                            )
+                        if resp.status_code == 201:
+                            data = resp.json()
+                            st.session_state._redeemed_key = data["raw_key"]
+                            st.rerun()
+                        elif resp.status_code == 404:
+                            st.error("Invite code not found.")
+                        elif resp.status_code == 410:
+                            st.error(resp.json().get("detail", "Invite code is no longer valid."))
+                        else:
+                            st.error(f"Error {resp.status_code}: {resp.text}")
+                    except Exception as exc:
+                        st.error(f"Could not reach the API — {exc}")
 
     # ── Show newly redeemed key ───────────────────────────────────────────────
     if st.session_state._redeemed_key:
@@ -957,45 +930,31 @@ with st.sidebar:
         if _active_model:
             st.caption(f"Using **{_active_model}** via {_PROVIDER_OPTS[_sel_provider]}")
 
-    # ── Connection (Only shown in dev/open mode) ──────────────────────────────
-    if not settings.ENABLE_AUTH:
-        with st.expander("Connection", expanded=False):
-            new_url = st.text_input(
-                "API URL", value=st.session_state.api_url,
-                placeholder="http://localhost:8058", label_visibility="collapsed",
-            )
-            if new_url != st.session_state.api_url:
-                st.session_state.api_url = new_url.strip()
-                st.session_state.session_page = 1
-                st.session_state._sessions_dirty = True
-                st.session_state._health_ts = 0.0
-                st.session_state._auth_mode = None
-                st.rerun()
+    # ── Connection ────────────────────────────────────────────────────────────
+    with st.expander("Connection", expanded=False):
+        new_url = st.text_input(
+            "API URL", value=st.session_state.api_url,
+            placeholder="http://localhost:8058", label_visibility="collapsed",
+        )
+        if new_url != st.session_state.api_url:
+            st.session_state.api_url = new_url.strip()
+            st.session_state.session_page = 1
+            st.session_state._sessions_dirty = True
+            st.session_state._health_ts = 0.0
+            st.rerun()
 
-            if st.button("⟳  Refresh status", use_container_width=True):
-                st.session_state._health_ts = 0.0
-                st.session_state.session_page = 1
-                st.session_state._sessions_dirty = True
-                st.session_state._auth_mode = None
-                st.rerun()
+        if st.button("⟳  Refresh status", use_container_width=True):
+            st.session_state._health_ts = 0.0
+            st.session_state.session_page = 1
+            st.session_state._sessions_dirty = True
+            st.rerun()
 
 
 # ── Chat page ─────────────────────────────────────────────────────────────────
 if st.session_state.nav == "chat":
     sid = st.session_state.current_session_id
 
-    if not st.session_state.api_key and _detect_open_mode() == "auth":
-        # Not authenticated and server requires auth → show onboarding
-        st.markdown("## Welcome to Neat-RAG")
-        st.markdown("""
-Get started in three steps:
-
-1. **Get an invite code** from your administrator
-2. **Redeem it** in the sidebar → you'll receive your personal API key
-3. **Paste the key** in the Account section above and start chatting
-""")
-        st.info("Already have an API key? Paste it in the **Account** section of the sidebar.")
-    elif sid is None:
+    if sid is None:
         st.markdown("## Chat")
         st.info("Create or select a session in the sidebar to start chatting.")
     else:

@@ -26,7 +26,9 @@ async def lifespan(app: FastAPI):
     await pg_pool.connect()
     vector_store = get_vector_store()
     await vector_store.connect()
-    logger.info("Neat-RAG API started", env=settings.APP_ENV, auth_enabled=settings.ENABLE_AUTH,
+    logger.info("Neat-RAG API started", env=settings.APP_ENV,
+                admin_key_set=bool(settings.ADMIN_BOOTSTRAP_KEY),
+                database_shared=settings.DATABASE_SHARED,
                 vector_backend=settings.VECTOR_STORE_BACKEND)
     yield
     await vector_store.disconnect()

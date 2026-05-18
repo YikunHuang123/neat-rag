@@ -1,8 +1,8 @@
 """Admin endpoints for API key and invite token management.
 
-All endpoints under /admin require a valid API key when ENABLE_AUTH=True.
-In development (ENABLE_AUTH=False) these endpoints are freely accessible so
-you can bootstrap your first key without a chicken-and-egg problem.
+All endpoints under /admin require either:
+- ADMIN_BOOTSTRAP_KEY (operator key set in .env)
+- A regular API key with scopes=["admin"]
 """
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from neat_rag.api.deps import get_connection
-from neat_rag.api.middleware import generate_api_key, verify_api_key
+from neat_rag.api.middleware import generate_api_key, verify_admin
 from neat_rag.db.api_keys import ApiKeyRepository
 from neat_rag.db.invites import InviteTokenRepository
 from neat_rag.logger import get_logger
@@ -50,7 +50,7 @@ class KeySummary(BaseModel):
 async def create_api_key(
     body: CreateKeyRequest,
     conn=Depends(get_connection),
-    _owner: Optional[str] = Depends(verify_api_key),
+    _owner: Optional[str] = Depends(verify_admin),
 ):
     """Create a new API key. The raw key is returned once and cannot be retrieved again."""
     raw_key, hashed_key = generate_api_key()
@@ -69,7 +69,7 @@ async def create_api_key(
 async def list_api_keys(
     owner: Optional[str] = None,
     conn=Depends(get_connection),
-    _owner: Optional[str] = Depends(verify_api_key),
+    _owner: Optional[str] = Depends(verify_admin),
 ):
     """List all API keys (hashed — raw keys are never returned after creation)."""
     repo = ApiKeyRepository(conn)
@@ -90,7 +90,7 @@ async def list_api_keys(
 async def delete_api_key(
     key_id: str,
     conn=Depends(get_connection),
-    _owner: Optional[str] = Depends(verify_api_key),
+    _owner: Optional[str] = Depends(verify_admin),
 ):
     """Revoke an API key by its ID."""
     repo = ApiKeyRepository(conn)
@@ -119,7 +119,7 @@ class InviteSummary(BaseModel):
 async def create_invite(
     body: CreateInviteRequest,
     conn=Depends(get_connection),
-    _owner: Optional[str] = Depends(verify_api_key),
+    _owner: Optional[str] = Depends(verify_admin),
 ):
     """Generate a one-time invite token for a user to self-redeem an API key."""
     if body.expires_in_days < 1 or body.expires_in_days > 90:
@@ -143,7 +143,7 @@ async def create_invite(
 @router.get("/invites", response_model=List[InviteSummary])
 async def list_invites(
     conn=Depends(get_connection),
-    _owner: Optional[str] = Depends(verify_api_key),
+    _owner: Optional[str] = Depends(verify_admin),
 ):
     """List all invite tokens."""
     repo = InviteTokenRepository(conn)
@@ -166,7 +166,7 @@ async def list_invites(
 async def delete_invite(
     token_id: str,
     conn=Depends(get_connection),
-    _owner: Optional[str] = Depends(verify_api_key),
+    _owner: Optional[str] = Depends(verify_admin),
 ):
     """Revoke an invite token by its ID."""
     repo = InviteTokenRepository(conn)

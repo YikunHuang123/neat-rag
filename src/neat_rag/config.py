@@ -144,11 +144,13 @@ class Settings(BaseSettings):
     DOMAIN_DESCRIPTION: str = "a knowledge base of indexed documents"
 
     # --- Security & Rate Limiting ---
-    # Set ENABLE_AUTH=true in production and issue keys via the /admin/keys endpoint
-    ENABLE_AUTH: bool = False
-    # When True, all authenticated users share a single dataset
+    # Static operator key for admin endpoints. Set in .env for production.
+    # Grants access to /admin/* regardless of DB state (bootstrap + permanent operator key).
+    # Delegates can also be created: API keys with scopes=["admin"] grant the same access.
+    ADMIN_BOOTSTRAP_KEY: str = "admin"
+    # When True, all users share a single dataset (user_id never propagated to DB layer).
     # When False (default), each API key owner sees only their own documents/sessions.
-    DATABASE_SHARED: bool = True
+    DATABASE_SHARED: bool = False
     # slowapi limit strings — see https://limits.readthedocs.io/en/stable/string-notation.html
     RATE_LIMIT_DEFAULT: str = "60/minute"
     RATE_LIMIT_CHAT: str = "10/minute"
