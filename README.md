@@ -429,6 +429,16 @@ neat_rag/
 
 ---
 
+## 🔮 Follow-up development plan
+
+- **Frontend Overhaul** — Refactor the existing Streamlit UI into **React** application for improved interactivity, state management, and performance.
+- **Enhanced Feedback Loop** — Currently, user "likes" and "dislikes" are collected and stored. Future updates will leverage this data for:
+    - **Offline Quality Assessment**: Systematic analysis of user feedback to identify and fix failure modes in the RAG pipeline.
+    - **RLHF Integration**: Utilizing user preferences to fine-tune response generation and alignment.
+    - **Dynamic Re-ranking**: Implementing a feedback-aware retrieval layer that boosts the scores of document snippets that have historically received positive user ratings.
+
+---
+
 ## 🤝 Contributing
 
 Contributions, bug reports, and feature requests are welcome.
