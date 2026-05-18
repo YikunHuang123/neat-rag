@@ -146,14 +146,52 @@ class IngestionPipeline:
                 ]
 
                 # ── Step 5: Persist ──────────────────────────────────────
-                # 5a. Save chunk vectors via the active backend FIRST.
-                # If this fails, the document won't be visible in the UI (PostgreSQL).
-                await self.vector_store.upsert_chunks(document, chunks)
+                # Write order rationale (consistency trade-off):
+                #
+                #   Option A — PG first (chosen): if the vector upsert fails after
+                #   PG commits, the document is visible in the UI but unsearchable
+                #   ("orphan metadata").  This is recoverable: chunk_count > 0 with
+                #   no vector records is detectable and re-indexable.
+                #
+                #   Option B — vector store first (old code): if PG fails after the
+                #   vector upsert, vectors exist with no matching document row
+                #   ("orphan vectors").  These pollute search results silently and
+                #   are hard to detect without cross-store reconciliation.
+                #
+                # High-concurrency note for Option A: between the PG commit and the
+                # vector upsert there is a brief window where a search returns the
+                # document row but finds no chunks.  Callers should treat an empty
+                # chunk list as "indexing in progress" rather than "empty document".
 
-                # 5b. Save document metadata to PostgreSQL (commits the document).
+                # 5a. Commit document metadata to PostgreSQL.
+                #     On failure, no vectors have been written — clean state.
                 async with self.pg_pool.transaction() as doc_conn:
                     doc_repo = DocumentRepository(doc_conn)
                     await doc_repo.save_document(document)
+                logger.info(
+                    "Document metadata committed to PostgreSQL",
+                    document_id=doc_id,
+                )
+
+                # 5b. Write chunk vectors to the active backend.
+                #     If this raises, the outer except marks the job failed and
+                #     logs the inconsistency.  The document can be re-indexed by
+                #     detecting rows where chunk_count > 0 but vector count == 0.
+                try:
+                    await self.vector_store.upsert_chunks(document, chunks)
+                    logger.info(
+                        "Vectors written to vector store",
+                        document_id=doc_id,
+                        chunks=len(chunks),
+                    )
+                except Exception as vec_err:
+                    logger.error(
+                        "Vector upsert failed after PG commit — document has metadata "
+                        "but no vectors (orphan-metadata state); re-index to recover",
+                        document_id=doc_id,
+                        error=str(vec_err),
+                    )
+                    raise
 
                 if job_repo and job_id:
                     await job_repo.mark_completed(job_id)
