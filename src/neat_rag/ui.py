@@ -17,6 +17,48 @@ import httpx
 import streamlit as st
 from neat_rag.config import settings
 
+# ── Cookie Persistence Helpers ────────────────────────────────────────────────
+def _get_cookie(name: str, default: Any = None) -> Any:
+    """Read a cookie via st.context.cookies (Streamlit 1.34+)."""
+    try:
+        # st.context.cookies is a read-only dict
+        return st.context.cookies.get(name, default)
+    except Exception:
+        return default
+
+
+def _set_cookie_js(name: str, value: str):
+    """Queue a cookie to be set via JS bridge at the end of the run."""
+    if "_pending_cookies" not in st.session_state:
+        st.session_state["_pending_cookies"] = {}
+    st.session_state["_pending_cookies"][name] = value
+
+
+def _render_pending_cookies():
+    """Renders all queued cookies in a single JS call to avoid layout gaps."""
+    pending = st.session_state.get("_pending_cookies", {})
+    if not pending:
+        return
+    
+    import json
+    scripts = []
+    for name, value in pending.items():
+        safe_val = json.dumps(value)
+        scripts.append(f'document.cookie = "{name}=" + encodeURIComponent({safe_val}) + "; path=/; max-age=31536000; SameSite=Lax";')
+    
+    # Use window.parent.document because Streamlit components run in an iframe
+    js_code = f"""
+        <script>
+            const setCookie = (n, v) => {{
+                window.parent.document.cookie = n + "=" + encodeURIComponent(v) + "; path=/; max-age=31536000; SameSite=Lax";
+            }};
+            {chr(10).join([f"setCookie('{k}', {json.dumps(v)});" for k, v in pending.items()])}
+        </script>
+    """
+    st.iframe(js_code, height=1)
+    # Clear queue after rendering
+    st.session_state["_pending_cookies"] = {}
+
 # ── Page configuration ────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Neat-RAG",
@@ -319,14 +361,14 @@ _MODEL_DEFAULTS: Dict[str, str] = {
     "gemini":    "gemini-2.5-flash",
     "anthropic": "claude-3-5-haiku-latest",
     "deepseek":  "deepseek-chat",
-    "ollama":    "llama3",
+    "ollama":    "qwen2.5:7b",
     "custom":    "",
 }
 
 # ── Session-state defaults ────────────────────────────────────────────────────
 _DEFAULTS: Dict[str, Any] = {
-    "api_url": os.getenv("API_URL", "http://localhost:8058"),
-    "api_key": "",
+    "api_url": _get_cookie("nrag_api_url", os.getenv("API_URL", "http://localhost:8058")),
+    "api_key": _get_cookie("nrag_api_key", ""),
     "search_type": settings.DEFAULT_SEARCH_TYPE,
     "current_session_id": None,
     "sessions": [],
@@ -344,10 +386,10 @@ _DEFAULTS: Dict[str, Any] = {
     "session_page_size": 10,
     "session_total": 0,
     # LLM model override (set from the Model picker in the sidebar)
-    "llm_provider": "server",   # "server" = use server's configured LLM
-    "llm_model_inp": "",
-    "llm_api_key_inp": "",
-    "llm_base_url_inp": "",
+    "llm_provider": _get_cookie("nrag_llm_provider", "server"),
+    "llm_model_inp": _get_cookie("nrag_llm_model", ""),
+    "llm_api_key_inp": _get_cookie("nrag_llm_api_key", ""),
+    "llm_base_url_inp": _get_cookie("nrag_llm_base_url", ""),
     "editing_session_id": None,
 }
 for _k, _v in _DEFAULTS.items():
@@ -671,6 +713,27 @@ def _jobs_panel():
                     st.caption("First run with images — downloading ~1 GB model weights, please wait…")
 
 
+def _verify_api_key_logic(online: bool):
+    """Probes the API to verify the current key and its permissions."""
+    if st.session_state.api_key and st.session_state.api_key_valid is None:
+        # 1. Try regular access first to verify key validity
+        res = _api("get", "/sessions?limit=1", silent=True)
+        if res is not None:
+            st.session_state.api_key_valid = True
+            if res.get("items"):
+                st.session_state.current_user = res["items"][0].get("user_id")
+
+            # 2. Then probe for admin privileges
+            admin_res = _api("get", "/admin/keys", silent=True)
+            st.session_state.is_admin = admin_res is not None
+        else:
+            # If API is online but request failed, the key is invalid
+            if online:
+                st.session_state.api_key_valid = False
+    elif not st.session_state.api_key:
+        st.session_state.is_admin = False
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     online = _health()
@@ -690,25 +753,8 @@ with st.sidebar:
 </div>""", unsafe_allow_html=True)
     with hcol2:
         # Probe access once per key (cached in is_admin until key changes)
-        if st.session_state.api_key and st.session_state.api_key_valid is None:
-            # 1. Try regular access first to verify key validity
-            res = _api("get", "/sessions?limit=1", silent=True)
-            if res is not None:
-                st.session_state.api_key_valid = True
-                if res.get("items"):
-                    st.session_state.current_user = res["items"][0].get("user_id")
-                
-                # 2. Then probe for admin privileges
-                admin_res = _api("get", "/admin/keys", silent=True)
-                st.session_state.is_admin = admin_res is not None
-            else:
-                # If API is online but request failed, the key is invalid
-                if online:
-                    st.session_state.api_key_valid = False
-        elif not st.session_state.api_key:
-            st.session_state.is_admin = False
+        _verify_api_key_logic(online)
         show_admin = st.session_state.is_admin
-
         if show_admin:
             if st.button(
                 "🔑",
@@ -735,6 +781,7 @@ with st.sidebar:
     )
     if new_key != st.session_state.api_key:
         st.session_state.api_key = new_key.strip()
+        _set_cookie_js("nrag_api_key", st.session_state.api_key)
         st.session_state.api_key_valid = None
         st.session_state.is_admin = False
         st.session_state.sessions = []
@@ -746,7 +793,11 @@ with st.sidebar:
         st.session_state._redeemed_key = None
         if st.session_state.nav == "admin" and not new_key:
             st.session_state.nav = "chat"
-        st.rerun()
+            
+        # Manually trigger verification for the new key in the current run
+        _verify_api_key_logic(online)
+        show_admin = st.session_state.is_admin
+        # Removed st.rerun() to allow JS bridge to execute
 
     if st.session_state.api_key:
         if show_admin:
@@ -939,26 +990,38 @@ with st.sidebar:
         st.session_state.llm_model_inp   = _MODEL_DEFAULTS.get(_sel_provider, "")
         st.session_state.llm_api_key_inp = ""
         st.session_state.llm_base_url_inp = ""
-        st.rerun()
+        
+        # Persist change
+        _set_cookie_js("nrag_llm_provider", _sel_provider)
+        _set_cookie_js("nrag_llm_model", st.session_state.llm_model_inp)
+        _set_cookie_js("nrag_llm_api_key", "")
+        _set_cookie_js("nrag_llm_base_url", "")
+        # Removed st.rerun() to ensure JS executes
 
     if _sel_provider != "server":
         # Model name — pre-filled with provider default, editable
-        st.text_input(
+        new_model = st.text_input(
             "Model",
+            value=st.session_state.llm_model_inp,
             placeholder=_MODEL_DEFAULTS.get(_sel_provider, "model-name"),
-            key="llm_model_inp",
             help="Model identifier (e.g. gpt-4o, llama3). Leave blank to use the provider default.",
         )
+        if new_model != st.session_state.llm_model_inp:
+            st.session_state.llm_model_inp = new_model
+            _set_cookie_js("nrag_llm_model", new_model)
 
         # Cloud providers: optional API key (falls back to server's key if empty)
         if _sel_provider not in ("ollama",):
-            st.text_input(
+            new_llm_key = st.text_input(
                 "API Key",
+                value=st.session_state.llm_api_key_inp,
                 placeholder="Leave blank to use server's key",
                 type="password",
-                key="llm_api_key_inp",
                 help="Your personal API key. Leave blank to use the key configured on the server.",
             )
+            if new_llm_key != st.session_state.llm_api_key_inp:
+                st.session_state.llm_api_key_inp = new_llm_key
+                _set_cookie_js("nrag_llm_api_key", new_llm_key)
 
         # Local / custom providers: endpoint URL
         if _sel_provider in ("ollama", "custom"):
@@ -967,12 +1030,15 @@ with st.sidebar:
                 if _sel_provider == "ollama"
                 else "https://api.example.com"
             )
-            st.text_input(
+            new_llm_url = st.text_input(
                 "Endpoint URL",
+                value=st.session_state.llm_base_url_inp,
                 placeholder=_url_ph,
-                key="llm_base_url_inp",
                 help="Base URL of the OpenAI-compatible endpoint (without /v1).",
             )
+            if new_llm_url != st.session_state.llm_base_url_inp:
+                st.session_state.llm_base_url_inp = new_llm_url
+                _set_cookie_js("nrag_llm_base_url", new_llm_url)
 
         _active_model = (
             st.session_state.llm_model_inp
@@ -990,6 +1056,7 @@ with st.sidebar:
             )
             if new_url != st.session_state.api_url:
                 st.session_state.api_url = new_url.strip()
+                _set_cookie_js("nrag_api_url", st.session_state.api_url)
                 st.session_state.session_page = 1
                 st.session_state._sessions_dirty = True
                 st.session_state._health_ts = 0.0
@@ -1000,6 +1067,10 @@ with st.sidebar:
                 st.session_state.session_page = 1
                 st.session_state._sessions_dirty = True
                 st.rerun()
+
+    # Finalize any pending cookie updates at the very end of the sidebar 
+    # to avoid affecting the layout of components above.
+    _render_pending_cookies()
 
 
 # ── Chat page ─────────────────────────────────────────────────────────────────
