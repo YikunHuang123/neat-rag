@@ -97,6 +97,10 @@ class ApiKey(BaseModel):
     scopes: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_used_at: Optional[datetime] = None
+    is_active: bool = True
+    can_upload: bool = True
+    can_delete: bool = True
+    can_chat: bool = True
 
 class InviteToken(BaseModel):
     """One-time invite token that a user redeems to receive an API key."""

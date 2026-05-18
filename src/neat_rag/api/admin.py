@@ -15,6 +15,7 @@ from neat_rag.api.deps import get_connection
 from neat_rag.api.middleware import generate_api_key, verify_admin
 from neat_rag.db.api_keys import ApiKeyRepository
 from neat_rag.db.invites import InviteTokenRepository
+from neat_rag.exceptions import RecordNotFoundError
 from neat_rag.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,6 +43,17 @@ class KeySummary(BaseModel):
     scopes: List[str]
     created_at: str
     last_used_at: Optional[str]
+    is_active: bool
+    can_upload: bool
+    can_delete: bool
+    can_chat: bool
+
+
+class UpdatePermissionsRequest(BaseModel):
+    is_active: bool = True
+    can_upload: bool = True
+    can_delete: bool = True
+    can_chat: bool = True
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -74,16 +86,7 @@ async def list_api_keys(
     """List all API keys (hashed — raw keys are never returned after creation)."""
     repo = ApiKeyRepository(conn)
     keys = await repo.list_keys(owner=owner)
-    return [
-        KeySummary(
-            id=k.id,
-            owner=k.owner,
-            scopes=k.scopes,
-            created_at=k.created_at.isoformat(),
-            last_used_at=k.last_used_at.isoformat() if k.last_used_at else None,
-        )
-        for k in keys
-    ]
+    return [_to_key_summary(k) for k in keys]
 
 
 @router.delete("/keys/{key_id}", status_code=204)
@@ -96,6 +99,38 @@ async def delete_api_key(
     repo = ApiKeyRepository(conn)
     await repo.delete_key(key_id)
     logger.info("API key revoked", key_id=key_id)
+
+
+@router.patch("/keys/{key_id}/permissions", response_model=KeySummary)
+async def update_key_permissions(
+    key_id: str,
+    body: UpdatePermissionsRequest,
+    conn=Depends(get_connection),
+    _owner: Optional[str] = Depends(verify_admin),
+):
+    """Update the permission flags for a user's API key."""
+    logger.debug("Updating key permissions", key_id=key_id, body=body.model_dump())
+    repo = ApiKeyRepository(conn)
+    try:
+        key = await repo.update_permissions(
+            key_id=key_id,
+            is_active=body.is_active,
+            can_upload=body.can_upload,
+            can_delete=body.can_delete,
+            can_chat=body.can_chat,
+        )
+    except RecordNotFoundError:
+        logger.warning("Update failed: Key not found", key_id=key_id)
+        raise HTTPException(status_code=404, detail=f"API key '{key_id}' not found.")
+    logger.info(
+        "Key permissions updated",
+        key_id=key_id,
+        is_active=body.is_active,
+        can_upload=body.can_upload,
+        can_delete=body.can_delete,
+        can_chat=body.can_chat,
+    )
+    return _to_key_summary(key)
 
 
 # ── Invite token endpoints ────────────────────────────────────────────────────
@@ -172,3 +207,19 @@ async def delete_invite(
     repo = InviteTokenRepository(conn)
     await repo.delete(token_id)
     logger.info("Invite token revoked", token_id=token_id)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _to_key_summary(k) -> KeySummary:
+    return KeySummary(
+        id=k.id,
+        owner=k.owner,
+        scopes=k.scopes,
+        created_at=k.created_at.isoformat(),
+        last_used_at=k.last_used_at.isoformat() if k.last_used_at else None,
+        is_active=k.is_active,
+        can_upload=k.can_upload,
+        can_delete=k.can_delete,
+        can_chat=k.can_chat,
+    )

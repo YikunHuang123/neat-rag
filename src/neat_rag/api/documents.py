@@ -7,7 +7,7 @@ import asyncpg
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, Response
 
 from neat_rag.api.deps import get_connection, get_pipeline, get_store
-from neat_rag.api.middleware import doc_scope, verify_api_key
+from neat_rag.api.middleware import doc_scope, verify_api_key, require_upload_permission, require_delete_permission
 from neat_rag.api.schemas import (
     DocumentListResponse,
     DocumentResponse,
@@ -46,7 +46,7 @@ async def upload_document(
     file: UploadFile = File(...),
     conn: asyncpg.Connection = Depends(get_connection),
     pipeline: IngestionPipeline = Depends(get_pipeline),
-    owner: Optional[str] = Depends(verify_api_key),
+    owner: Optional[str] = Depends(require_upload_permission),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -121,7 +121,7 @@ async def delete_document(
     document_id: str,
     conn: asyncpg.Connection = Depends(get_connection),
     store: VectorStoreBase = Depends(get_store),
-    owner: Optional[str] = Depends(verify_api_key),
+    owner: Optional[str] = Depends(require_delete_permission),
 ):
     doc_repo = DocumentRepository(conn)
     try:

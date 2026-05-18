@@ -10,6 +10,14 @@ Auth model (no on/off flag — always active):
   - Regular key      → authenticated user; owner string always returned
   - ADMIN_BOOTSTRAP_KEY or key with scopes=["admin"] → admin endpoints allowed
 
+Permission dependencies (for user endpoints):
+  - verify_api_key            → checks key validity + is_active; returns owner
+  - require_upload_permission → additionally checks can_upload
+  - require_delete_permission → additionally checks can_delete
+  - require_chat_permission   → additionally checks can_chat
+
+Admin-scoped keys and the bootstrap key bypass all permission flag checks.
+
 DATABASE_SHARED only affects document/vector queries, NOT sessions or jobs.
 Use doc_scope(owner) at the call site for document reads and vector searches.
 
@@ -34,6 +42,7 @@ from neat_rag.config import settings
 from neat_rag.db.api_keys import ApiKeyRepository
 from neat_rag.db.pool import pg_pool
 from neat_rag.logger import get_logger
+from neat_rag.models import ApiKey
 
 logger = get_logger(__name__)
 
@@ -50,6 +59,12 @@ limiter = Limiter(
 # API Key scheme
 # ---------------------------------------------------------------------------
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+_PERMISSION_LABELS: dict[str, str] = {
+    "can_upload": "Upload",
+    "can_delete": "Delete",
+    "can_chat": "Chat",
+}
 
 
 def hash_api_key(raw_key: str) -> str:
@@ -80,46 +95,77 @@ def doc_scope(owner: Optional[str]) -> Optional[str]:
     return None if settings.DATABASE_SHARED else owner
 
 
-async def verify_api_key(
-    raw_key: Optional[str] = Security(_api_key_header),
-) -> Optional[str]:
+async def _lookup_and_touch(raw_key: str) -> ApiKey:
     """
-    FastAPI dependency for regular endpoints.
+    Hash lookup + best-effort last_used_at update in a single connection.
+    Raises HTTP 401 if the key is not found in the database.
+    """
+    hashed = hash_api_key(raw_key)
+    async with pg_pool.get_connection() as conn:
+        repo = ApiKeyRepository(conn)
+        key_record = await repo.get_key_by_hash(hashed)
+        if key_record is None:
+            logger.warning("Invalid API key attempt", hashed_prefix=hashed[:8])
+            raise HTTPException(status_code=401, detail="Invalid API key")
+        try:
+            await repo.touch_last_used(hashed)
+        except Exception:
+            pass
+    return key_record
 
-    - No key supplied → 401 (key required).
-    - ADMIN_BOOTSTRAP_KEY → returns "__bootstrap__" (admin identity, no DB lookup).
-    - Valid DB key        → returns the key owner string.
-    - Invalid key         → 401.
 
-    Sessions and jobs use this value directly for strict per-user isolation.
-    Document/vector queries should wrap the result with doc_scope(owner).
+async def _verify_permissions(
+    raw_key: Optional[str],
+    required_flag: Optional[str] = None,
+) -> str:
+    """
+    Central auth + permission check used by all public endpoint dependencies.
+
+    - required_flag: ApiKey attribute name to check (e.g. "can_upload"). None = active-only check.
+    - Admin-scoped keys and the bootstrap key bypass is_active and all flag checks.
+    Returns the key owner string.
     """
     if not raw_key:
         raise HTTPException(status_code=401, detail="API key required")
 
-    # Operator bootstrap key — fast path, no DB roundtrip
     if settings.ADMIN_BOOTSTRAP_KEY and raw_key == settings.ADMIN_BOOTSTRAP_KEY:
         return "__bootstrap__"
 
-    hashed = hash_api_key(raw_key)
+    key_record = await _lookup_and_touch(raw_key)
+    is_admin = "admin" in key_record.scopes
 
-    async with pg_pool.get_connection() as conn:
-        repo = ApiKeyRepository(conn)
-        key_record = await repo.get_key_by_hash(hashed)
+    if not key_record.is_active and not is_admin:
+        raise HTTPException(status_code=403, detail="Account is disabled")
 
-    if key_record is None:
-        logger.warning("Invalid API key attempt", hashed_prefix=hashed[:8])
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    # Touch last_used_at asynchronously — best-effort, don't fail the request
-    try:
-        async with pg_pool.get_connection() as conn:
-            repo = ApiKeyRepository(conn)
-            await repo.touch_last_used(hashed)
-    except Exception:
-        pass
+    if required_flag and not is_admin and not getattr(key_record, required_flag, True):
+        label = _PERMISSION_LABELS.get(required_flag, required_flag)
+        raise HTTPException(status_code=403, detail=f"{label} permission denied")
 
     return key_record.owner
+
+
+async def verify_api_key(
+    raw_key: Optional[str] = Security(_api_key_header),
+) -> Optional[str]:
+    return await _verify_permissions(raw_key)
+
+
+async def require_upload_permission(
+    raw_key: Optional[str] = Security(_api_key_header),
+) -> str:
+    return await _verify_permissions(raw_key, "can_upload")
+
+
+async def require_delete_permission(
+    raw_key: Optional[str] = Security(_api_key_header),
+) -> str:
+    return await _verify_permissions(raw_key, "can_delete")
+
+
+async def require_chat_permission(
+    raw_key: Optional[str] = Security(_api_key_header),
+) -> str:
+    return await _verify_permissions(raw_key, "can_chat")
 
 
 async def verify_admin(
@@ -137,29 +183,13 @@ async def verify_admin(
     if not raw_key:
         raise HTTPException(status_code=403, detail="Admin key required")
 
-    # Operator bootstrap key — fast path, no DB roundtrip
     if settings.ADMIN_BOOTSTRAP_KEY and raw_key == settings.ADMIN_BOOTSTRAP_KEY:
         return "__bootstrap__"
 
-    hashed = hash_api_key(raw_key)
-
-    async with pg_pool.get_connection() as conn:
-        repo = ApiKeyRepository(conn)
-        key_record = await repo.get_key_by_hash(hashed)
-
-    if key_record is None:
-        logger.warning("Unauthorized admin access attempt (invalid key)", hashed_prefix=hashed[:8])
-        raise HTTPException(status_code=401, detail="Invalid API key")
+    key_record = await _lookup_and_touch(raw_key)
 
     if "admin" not in key_record.scopes:
         raise HTTPException(status_code=403, detail="Admin access required")
-
-    try:
-        async with pg_pool.get_connection() as conn:
-            repo = ApiKeyRepository(conn)
-            await repo.touch_last_used(hashed)
-    except Exception:
-        pass
 
     return key_record.owner
 

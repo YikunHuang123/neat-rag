@@ -7,6 +7,11 @@ from neat_rag.logger import get_logger
 
 logger = get_logger(__name__)
 
+_SELECT_COLS = (
+    "id::text, hashed_key, owner, scopes, created_at, last_used_at, "
+    "is_active, can_upload, can_delete, can_chat"
+)
+
 
 def _row_to_api_key(row) -> ApiKey:
     return ApiKey(
@@ -16,6 +21,10 @@ def _row_to_api_key(row) -> ApiKey:
         scopes=list(row["scopes"]) if row["scopes"] else [],
         created_at=row["created_at"],
         last_used_at=row["last_used_at"],
+        is_active=row["is_active"],
+        can_upload=row["can_upload"],
+        can_delete=row["can_delete"],
+        can_chat=row["can_chat"],
     )
 
 
@@ -32,10 +41,10 @@ class ApiKeyRepository:
         """Persist a new API key record. The caller must hash the raw key first."""
         try:
             row = await self.conn.fetchrow(
-                """
+                f"""
                 INSERT INTO api_keys (hashed_key, owner, scopes)
                 VALUES ($1, $2, $3)
-                RETURNING id::text, hashed_key, owner, scopes, created_at, last_used_at
+                RETURNING {_SELECT_COLS}
                 """,
                 hashed_key,
                 owner,
@@ -50,11 +59,7 @@ class ApiKeyRepository:
         """Look up an API key by its hash. Returns None if not found."""
         try:
             row = await self.conn.fetchrow(
-                """
-                SELECT id::text, hashed_key, owner, scopes, created_at, last_used_at
-                FROM api_keys
-                WHERE hashed_key = $1
-                """,
+                f"SELECT {_SELECT_COLS} FROM api_keys WHERE hashed_key = $1",
                 hashed_key,
             )
             return _row_to_api_key(row) if row else None
@@ -88,7 +93,7 @@ class ApiKeyRepository:
 
     async def list_keys(self, owner: Optional[str] = None) -> list[ApiKey]:
         """List all API keys, optionally filtered by owner."""
-        query = "SELECT id::text, hashed_key, owner, scopes, created_at, last_used_at FROM api_keys"
+        query = f"SELECT {_SELECT_COLS} FROM api_keys"
         params: list = []
         if owner is not None:
             params.append(owner)
@@ -100,3 +105,31 @@ class ApiKeyRepository:
         except Exception as e:
             logger.error("Failed to list API keys", error=str(e))
             raise DatabaseError(f"Failed to list API keys: {e}")
+
+    async def update_permissions(
+        self,
+        key_id: str,
+        is_active: bool,
+        can_upload: bool,
+        can_delete: bool,
+        can_chat: bool,
+    ) -> ApiKey:
+        """Update the four permission flags for a key. Returns the updated record."""
+        try:
+            row = await self.conn.fetchrow(
+                f"""
+                UPDATE api_keys
+                SET is_active=$2, can_upload=$3, can_delete=$4, can_chat=$5
+                WHERE id=$1::uuid
+                RETURNING {_SELECT_COLS}
+                """,
+                key_id, is_active, can_upload, can_delete, can_chat,
+            )
+            if row is None:
+                raise RecordNotFoundError(f"API key {key_id} not found.")
+            return _row_to_api_key(row)
+        except RecordNotFoundError:
+            raise
+        except Exception as e:
+            logger.error("Failed to update permissions", key_id=key_id, error=str(e))
+            raise DatabaseError(f"Failed to update permissions: {e}")

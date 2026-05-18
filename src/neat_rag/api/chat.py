@@ -13,7 +13,7 @@ from neat_rag.agent.prompts import build_system_prompt
 from neat_rag.agent.title import generate_session_title
 from neat_rag.agent.tools import AGENT_TOOLS, AgentContext
 from neat_rag.api.deps import get_connection
-from neat_rag.api.middleware import doc_scope, limiter, verify_api_key
+from neat_rag.api.middleware import doc_scope, limiter, require_chat_permission
 from neat_rag.api.schemas import ChatRequest, ChatResponse, CitationResponse
 from neat_rag.config import settings
 from neat_rag.db.pool import pg_pool
@@ -55,7 +55,7 @@ async def chat(
     request: Request,
     body: ChatRequest,
     conn: asyncpg.Connection = Depends(get_connection),
-    owner: Optional[str] = Depends(verify_api_key),
+    owner: Optional[str] = Depends(require_chat_permission),
 ):
     """Blocking chat — waits for the full agent response before returning."""
     session_repo = SessionRepository(conn)
@@ -109,7 +109,7 @@ async def chat_stream(
     request: Request,
     body: ChatRequest,
     conn: asyncpg.Connection = Depends(get_connection),
-    owner: Optional[str] = Depends(verify_api_key),
+    owner: Optional[str] = Depends(require_chat_permission),
 ):
     """
     Streaming chat via Server-Sent Events.

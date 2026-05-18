@@ -375,6 +375,14 @@ def _api(method: str, path: str, silent: bool = False, **kwargs) -> Optional[Dic
                 if not silent:
                     st.warning("Authentication required — please enter your API key in the Account section.")
                 return None
+            if resp.status_code == 403:
+                if not silent:
+                    try:
+                        detail = resp.json().get("detail", "Access denied")
+                    except Exception:
+                        detail = "Access denied"
+                    st.error(f"Access denied — {detail}. Please contact your administrator.")
+                return None
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
@@ -483,6 +491,12 @@ def _sse_generator(
     try:
         with httpx.Client(timeout=120) as c:
             with c.stream("POST", url, json=payload, headers=_hdrs()) as resp:
+                if resp.status_code == 403:
+                    try:
+                        detail = json.loads(resp.read()).get("detail", "Access denied")
+                    except Exception:
+                        detail = "Access denied"
+                    raise PermissionError(f"Access denied — {detail}. Please contact your administrator.")
                 resp.raise_for_status()
                 for line in resp.iter_lines():
                     if not line.startswith("data: "):
@@ -675,12 +689,22 @@ with st.sidebar:
   </div>
 </div>""", unsafe_allow_html=True)
     with hcol2:
-        # Probe admin access once per key (cached in is_admin until key changes)
+        # Probe access once per key (cached in is_admin until key changes)
         if st.session_state.api_key and st.session_state.api_key_valid is None:
-            res = _api("get", "/admin/keys", silent=True)
-            st.session_state.is_admin = res is not None
-            if st.session_state.is_admin:
-                st.session_state.api_key_valid = True  # admin key is always valid
+            # 1. Try regular access first to verify key validity
+            res = _api("get", "/sessions?limit=1", silent=True)
+            if res is not None:
+                st.session_state.api_key_valid = True
+                if res.get("items"):
+                    st.session_state.current_user = res["items"][0].get("user_id")
+                
+                # 2. Then probe for admin privileges
+                admin_res = _api("get", "/admin/keys", silent=True)
+                st.session_state.is_admin = admin_res is not None
+            else:
+                # If API is online but request failed, the key is invalid
+                if online:
+                    st.session_state.api_key_valid = False
         elif not st.session_state.api_key:
             st.session_state.is_admin = False
         show_admin = st.session_state.is_admin
@@ -728,7 +752,7 @@ with st.sidebar:
         if show_admin:
             st.caption("👑 Admin")
         elif st.session_state.api_key_valid:
-            st.caption(f"👤 {st.session_state.current_user or 'Verified'}")
+            st.caption(f"👤 {st.session_state.current_user or 'Verified User'}")
         elif st.session_state.api_key_valid is False:
             st.caption("🔴 Invalid key")
     else:
@@ -1109,7 +1133,7 @@ elif st.session_state.nav == "documents":
                         if st.button("🗑", key=f"del_{doc['id']}", help="Delete document"):
                             res = _api("delete", f"/documents/{doc['id']}")
                             if res is not None:
-                                st.success(f"Deleted '{doc['title']}'")
+                                st.toast(f"'{doc['title']}' deleted")
                                 st.rerun()
 
     # ── Upload tab ────────────────────────────────────────────────────────────
@@ -1175,6 +1199,12 @@ elif st.session_state.nav == "documents":
                             files={"file": (f.name, f.getvalue(), mime)},
                             headers=_hdrs(),
                         )
+                        if resp.status_code == 403:
+                            try:
+                                detail = resp.json().get("detail", "Access denied")
+                            except Exception:
+                                detail = "Access denied"
+                            raise PermissionError(f"Access denied — {detail}. Please contact your administrator.")
                         resp.raise_for_status()
                         jdata = resp.json()
                     job_map[f.name] = jdata.get("job_id", "")
@@ -1269,7 +1299,7 @@ elif st.session_state.nav == "admin":
             )
         st.stop()
 
-    tab_gen, tab_invites, tab_keys = st.tabs(["Generate Invite", "Invites", "API Keys"])
+    tab_gen, tab_invites, tab_keys, tab_perms = st.tabs(["Generate Invite", "Invites", "API Keys", "Permissions"])
 
     # ── Generate invite tab ───────────────────────────────────────────────────
     with tab_gen:
@@ -1366,3 +1396,94 @@ elif st.session_state.nav == "admin":
                     if st.button("✕", key=f"dk_{k['id']}", help="Revoke key"):
                         _api("delete", f"/admin/keys/{k['id']}", silent=True)
                         st.rerun()
+
+    # ── Permissions tab ───────────────────────────────────────────────────────
+    with tab_perms:
+        pcol, rpcol = st.columns([5, 1])
+        with rpcol:
+            if st.button("⟳ Refresh", key="ref_perms", use_container_width=True):
+                # Clear cached checkbox states so they re-initialize from API data.
+                for _k in list(st.session_state.keys()):
+                    if _k.startswith(("p_active_", "p_upload_", "p_delete_", "p_chat_")):
+                        del st.session_state[_k]
+                st.rerun()
+
+        perms_data = _api("get", "/admin/keys")
+        user_keys = [
+            k for k in (perms_data if isinstance(perms_data, list) else [])
+            if "admin" not in k.get("scopes", [])
+        ]
+        with pcol:
+            st.markdown(f"**{len(user_keys)}** user key(s)")
+
+        if not user_keys:
+            st.info("No user keys yet.")
+        else:
+            h0, h1, h2, h3, h4 = st.columns([3, 1, 1, 1, 1])
+            with h0: st.markdown("**Owner**")
+            with h1: st.markdown("**Active**")
+            with h2: st.markdown("**Upload**")
+            with h3: st.markdown("**Delete**")
+            with h4: st.markdown("**Chat**")
+            st.divider()
+
+            # Define the change handler once outside the loop
+            def _on_perm_change(kid: str, owner_name: str):
+                # Safely pull current values from session state
+                active = st.session_state.get(f"p_active_{kid}")
+                upload = st.session_state.get(f"p_upload_{kid}")
+                delete = st.session_state.get(f"p_delete_{kid}")
+                chat = st.session_state.get(f"p_chat_{kid}")
+                
+                # Guard: if state is missing for some reason, don't fire API
+                if any(v is None for v in [active, upload, delete, chat]):
+                    return
+
+                result = _api(
+                    "patch",
+                    f"/admin/keys/{kid}/permissions",
+                    json={
+                        "is_active": active,
+                        "can_upload": upload,
+                        "can_delete": delete,
+                        "can_chat": chat,
+                    },
+                    silent=True,
+                )
+                if result is not None:
+                    st.toast(f"Saved for **{owner_name}**")
+                else:
+                    st.toast(f"Failed to update **{owner_name}**", icon="❌")
+
+            for k in user_keys:
+                kid = k["id"]
+                owner_name = k.get("owner", "")
+
+                c0, c1, c2, c3, c4 = st.columns([3, 1, 1, 1, 1])
+                with c0:
+                    st.markdown(f"**{owner_name}**")
+                    st.caption(f"created {k.get('created_at', '')[:10]}")
+                with c1:
+                    st.checkbox(
+                        "Active", value=k.get("is_active", True),
+                        key=f"p_active_{kid}", label_visibility="collapsed",
+                        on_change=_on_perm_change, args=(kid, owner_name),
+                    )
+                with c2:
+                    st.checkbox(
+                        "Upload", value=k.get("can_upload", True),
+                        key=f"p_upload_{kid}", label_visibility="collapsed",
+                        on_change=_on_perm_change, args=(kid, owner_name),
+                    )
+                with c3:
+                    st.checkbox(
+                        "Delete", value=k.get("can_delete", True),
+                        key=f"p_delete_{kid}", label_visibility="collapsed",
+                        on_change=_on_perm_change, args=(kid, owner_name),
+                    )
+                with c4:
+                    st.checkbox(
+                        "Chat", value=k.get("can_chat", True),
+                        key=f"p_chat_{kid}", label_visibility="collapsed",
+                        on_change=_on_perm_change, args=(kid, owner_name),
+                    )
