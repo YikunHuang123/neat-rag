@@ -70,149 +70,147 @@ class IngestionPipeline:
         # before the temp file is cleaned up by the caller.
         doc_id = str(uuid.uuid4())
 
-        # Use a dedicated connection for job status — commits immediately per call,
-        # so progress is visible even if the document insert later fails.
-        async with self.pg_pool.get_connection() as status_conn:
-            job_repo = JobRepository(status_conn) if job_id else None
+        try:
+            # ── Step 1: Extract ──────────────────────────────────────
+            # Run in a thread pool — extraction (especially Docling PDF) is
+            # synchronous and CPU-intensive; blocking here would freeze the
+            # entire async event loop for all concurrent requests.
+            await _update_job(self.pg_pool, job_id, 0.1, JobStatus.PROCESSING)
+            extractor = dispatch_by_ext(file_path)
+            content, metadata = await asyncio.to_thread(extractor.extract, file_path)
+            if not content.strip():
+                raise IngestionError(f"Extraction produced empty content for '{file_path.name}'")
+            logger.info("Extraction done", file=file_path.name, content_len=len(content))
 
-            try:
-                # ── Step 1: Extract ──────────────────────────────────────
-                # Run in a thread pool — extraction (especially Docling PDF) is
-                # synchronous and CPU-intensive; blocking here would freeze the
-                # entire async event loop for all concurrent requests.
-                await _update_job(job_repo, job_id, 0.1, JobStatus.PROCESSING)
-                extractor = dispatch_by_ext(file_path)
-                content, metadata = await asyncio.to_thread(extractor.extract, file_path)
-                if not content.strip():
-                    raise IngestionError(f"Extraction produced empty content for '{file_path.name}'")
-                logger.info("Extraction done", file=file_path.name, content_len=len(content))
+            # ── Step 2: Chunk ────────────────────────────────────────
+            await _update_job(self.pg_pool, job_id, 0.3, JobStatus.PROCESSING)
 
-                # ── Step 2: Chunk ────────────────────────────────────────
-                await _update_job(job_repo, job_id, 0.3, JobStatus.PROCESSING)
-
-                if metadata.get("is_image"):
-                    # Images skip the generic chunker — we build exactly two
-                    # targeted chunks: one for the VLM description (captures
-                    # visual semantics) and one for the OCR text (captures
-                    # embedded characters).  Both chunks carry image_path so
-                    # the orchestrator can attach the raw image to multimodal
-                    # LLM requests.
-                    image_path_str = await asyncio.to_thread(
-                        _persist_image, file_path, doc_id, settings.IMAGE_STORAGE_PATH
-                    )
-                    metadata["image_path"] = image_path_str
-                    raw_chunks = _build_image_chunks(metadata)
-                else:
-                    raw_chunks = await asyncio.to_thread(
-                        self.chunker.chunk, content, metadata
-                    )
-
-                if not raw_chunks:
-                    raise IngestionError(f"Chunking produced no chunks for '{file_path.name}'")
-                logger.info("Chunking done", file=file_path.name, chunks=len(raw_chunks))
-
-                # ── Step 3: Embed ────────────────────────────────────────
-                await _update_job(job_repo, job_id, 0.5, JobStatus.PROCESSING)
-                vectors = await self.embedder.embed([c.content for c in raw_chunks])
-                logger.info("Embedding done", file=file_path.name, vectors=len(vectors))
-
-                # ── Step 4: Assemble domain models ───────────────────────
-                await _update_job(job_repo, job_id, 0.8, JobStatus.PROCESSING)
-                now = datetime.now(timezone.utc)
-                display_name = original_name or file_path.name
-                document = Document(
-                    id=doc_id,
-                    title=display_name,
-                    source=display_name,
-                    mime_type=metadata.get("mime_type", "application/octet-stream"),
-                    metadata={k: v for k, v in metadata.items() if k != "title"},
-                    created_at=now,
-                    updated_at=now,
-                    chunk_count=len(raw_chunks),
-                    user_id=user_id,
+            if metadata.get("is_image"):
+                # Images skip the generic chunker — we build exactly two
+                # targeted chunks: one for the VLM description (captures
+                # visual semantics) and one for the OCR text (captures
+                # embedded characters).  Both chunks carry image_path so
+                # the orchestrator can attach the raw image to multimodal
+                # LLM requests.
+                image_path_str = await asyncio.to_thread(
+                    _persist_image, file_path, doc_id, settings.IMAGE_STORAGE_PATH
                 )
-                chunks = [
-                    Chunk(
-                        id=str(uuid.uuid4()),
-                        document_id=document.id,
-                        content=raw.content,
-                        embedding=vectors[i],
-                        start_char=raw.start_char,
-                        end_char=raw.end_char,
-                        metadata=raw.metadata,
-                        created_at=now,
-                    )
-                    for i, raw in enumerate(raw_chunks)
-                ]
-
-                # ── Step 5: Persist ──────────────────────────────────────
-                # Write order rationale (consistency trade-off):
-                #
-                #   Option A — PG first (chosen): if the vector upsert fails after
-                #   PG commits, the document is visible in the UI but unsearchable
-                #   ("orphan metadata").  This is recoverable: chunk_count > 0 with
-                #   no vector records is detectable and re-indexable.
-                #
-                #   Option B — vector store first (old code): if PG fails after the
-                #   vector upsert, vectors exist with no matching document row
-                #   ("orphan vectors").  These pollute search results silently and
-                #   are hard to detect without cross-store reconciliation.
-                #
-                # High-concurrency note for Option A: between the PG commit and the
-                # vector upsert there is a brief window where a search returns the
-                # document row but finds no chunks.  Callers should treat an empty
-                # chunk list as "indexing in progress" rather than "empty document".
-
-                # 5a. Commit document metadata to PostgreSQL.
-                #     On failure, no vectors have been written — clean state.
-                async with self.pg_pool.transaction() as doc_conn:
-                    doc_repo = DocumentRepository(doc_conn)
-                    await doc_repo.save_document(document)
-                logger.info(
-                    "Document metadata committed to PostgreSQL",
-                    document_id=doc_id,
+                metadata["image_path"] = image_path_str
+                raw_chunks = _build_image_chunks(metadata)
+            else:
+                raw_chunks = await asyncio.to_thread(
+                    self.chunker.chunk, content, metadata
                 )
 
-                # 5b. Write chunk vectors to the active backend.
-                #     If this raises, the outer except marks the job failed and
-                #     logs the inconsistency.  The document can be re-indexed by
-                #     detecting rows where chunk_count > 0 but vector count == 0.
-                try:
-                    await self.vector_store.upsert_chunks(document, chunks)
-                    logger.info(
-                        "Vectors written to vector store",
-                        document_id=doc_id,
-                        chunks=len(chunks),
-                    )
-                except Exception as vec_err:
-                    logger.error(
-                        "Vector upsert failed after PG commit — document has metadata "
-                        "but no vectors (orphan-metadata state); re-index to recover",
-                        document_id=doc_id,
-                        error=str(vec_err),
-                    )
-                    raise
+            if not raw_chunks:
+                raise IngestionError(f"Chunking produced no chunks for '{file_path.name}'")
+            logger.info("Chunking done", file=file_path.name, chunks=len(raw_chunks))
 
-                if job_repo and job_id:
-                    await job_repo.mark_completed(job_id)
+            # ── Step 3: Embed ────────────────────────────────────────
+            await _update_job(self.pg_pool, job_id, 0.5, JobStatus.PROCESSING)
+            vectors = await self.embedder.embed([c.content for c in raw_chunks])
+            logger.info("Embedding done", file=file_path.name, vectors=len(vectors))
 
-                logger.info(
-                    "Ingestion complete",
-                    file=file_path.name,
+            # ── Step 4: Assemble domain models ───────────────────────
+            await _update_job(self.pg_pool, job_id, 0.8, JobStatus.PROCESSING)
+            now = datetime.now(timezone.utc)
+            display_name = original_name or file_path.name
+            document = Document(
+                id=doc_id,
+                title=display_name,
+                source=display_name,
+                mime_type=metadata.get("mime_type", "application/octet-stream"),
+                metadata={k: v for k, v in metadata.items() if k != "title"},
+                created_at=now,
+                updated_at=now,
+                chunk_count=len(raw_chunks),
+                user_id=user_id,
+            )
+            chunks = [
+                Chunk(
+                    id=str(uuid.uuid4()),
                     document_id=document.id,
+                    content=raw.content,
+                    embedding=vectors[i],
+                    start_char=raw.start_char,
+                    end_char=raw.end_char,
+                    metadata=raw.metadata,
+                    created_at=now,
+                )
+                for i, raw in enumerate(raw_chunks)
+            ]
+
+            # ── Step 5: Persist ──────────────────────────────────────
+            # Write order rationale (consistency trade-off):
+            #
+            #   Option A — PG first (chosen): if the vector upsert fails after
+            #   PG commits, the document is visible in the UI but unsearchable
+            #   ("orphan metadata").  This is recoverable: chunk_count > 0 with
+            #   no vector records is detectable and re-indexable.
+            #
+            #   Option B — vector store first (old code): if PG fails after the
+            #   vector upsert, vectors exist with no matching document row
+            #   ("orphan vectors").  These pollute search results silently and
+            #   are hard to detect without cross-store reconciliation.
+            #
+            # High-concurrency note for Option A: between the PG commit and the
+            # vector upsert there is a brief window where a search returns the
+            # document row but finds no chunks.  Callers should treat an empty
+            # chunk list as "indexing in progress" rather than "empty document".
+
+            # 5a. Commit document metadata to PostgreSQL.
+            #     On failure, no vectors have been written — clean state.
+            async with self.pg_pool.transaction() as doc_conn:
+                doc_repo = DocumentRepository(doc_conn)
+                await doc_repo.save_document(document)
+            logger.info(
+                "Document metadata committed to PostgreSQL",
+                document_id=doc_id,
+            )
+
+            # 5b. Write chunk vectors to the active backend.
+            #     If this raises, the outer except marks the job failed and
+            #     logs the inconsistency.  The document can be re-indexed by
+            #     detecting rows where chunk_count > 0 but vector count == 0.
+            try:
+                await self.vector_store.upsert_chunks(document, chunks)
+                logger.info(
+                    "Vectors written to vector store",
+                    document_id=doc_id,
                     chunks=len(chunks),
                 )
-                return document
-
-            except IngestionError:
-                if job_repo and job_id:
-                    await job_repo.mark_failed(job_id, "IngestionError — see server logs")
+            except Exception as vec_err:
+                logger.error(
+                    "Vector upsert failed after PG commit — document has metadata "
+                    "but no vectors (orphan-metadata state); re-index to recover",
+                    document_id=doc_id,
+                    error=str(vec_err),
+                )
                 raise
-            except Exception as e:
-                if job_repo and job_id:
-                    await job_repo.mark_failed(job_id, str(e))
-                logger.error("Ingestion failed", file=file_path.name, error=str(e))
-                raise IngestionError(f"Ingestion failed for '{file_path.name}': {e}") from e
+
+            if job_id:
+                async with self.pg_pool.get_connection() as conn:
+                    await JobRepository(conn).mark_completed(job_id)
+
+            logger.info(
+                "Ingestion complete",
+                file=file_path.name,
+                document_id=document.id,
+                chunks=len(chunks),
+            )
+            return document
+
+        except IngestionError:
+            if job_id:
+                async with self.pg_pool.get_connection() as conn:
+                    await JobRepository(conn).mark_failed(job_id, "IngestionError — see server logs")
+            raise
+        except Exception as e:
+            if job_id:
+                async with self.pg_pool.get_connection() as conn:
+                    await JobRepository(conn).mark_failed(job_id, str(e))
+            logger.error("Ingestion failed", file=file_path.name, error=str(e))
+            raise IngestionError(f"Ingestion failed for '{file_path.name}': {e}") from e
 
 
 def _persist_image(file_path: Path, doc_id: str, storage_path_str: str) -> str:
@@ -265,13 +263,14 @@ def _build_image_chunks(metadata: dict) -> List[RawChunk]:
 
 
 async def _update_job(
-    job_repo: Optional[JobRepository],
+    pg_pool: Optional[PgPool],
     job_id: Optional[str],
     progress: float,
     status: JobStatus,
 ) -> None:
-    if job_repo and job_id:
-        await job_repo.update_progress(job_id, progress, status)
+    if pg_pool and job_id:
+        async with pg_pool.get_connection() as conn:
+            await JobRepository(conn).update_progress(job_id, progress, status)
 
 
 # ── arq worker task ───────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 
 class VectorRetriever:
     """
-    iRetrieves chunks via cosine-similarty search.
+    Retrieves chunks via cosine-similarty search.
     Delegates to whatever VectorStoreBase backend is configured.
     """
 
@@ -66,7 +66,7 @@ class HybridRetriever:
         t0 = time.monotonic()
         try:
             embedding = await self._embedder.embed_one(query)
-            hits = await self._store.hybrid_search(embedding, query, top_k, user_id)
+            hits = await self._store.hybrid_search(embedding, query, top_k, user_id, text_weight)
             elapsed = (time.monotonic() - t0) * 1000
             logger.info("Hybrid search done", query=query[:60], hits=len(hits), ms=round(elapsed, 1))
             return SearchResult(

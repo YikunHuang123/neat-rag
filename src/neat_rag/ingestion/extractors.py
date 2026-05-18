@@ -374,7 +374,17 @@ SUPPORTED_EXTENSIONS = set(_EXT_MAP.keys())
 
 # Extractor singletons — heavy extractors (PdfExtractor/Docling) are expensive
 # to initialize; reuse instances across requests to avoid reloading models.
-_extractor_cache: Dict[str, Any] = {}
+# All image extensions share one ImageExtractor so Docling/SmolVLM weights are
+# loaded only once, regardless of which image format is processed first.
+_image_extractor = ImageExtractor()
+_extractor_cache: Dict[str, Any] = {
+    ".jpg":  _image_extractor,
+    ".jpeg": _image_extractor,
+    ".png":  _image_extractor,
+    ".gif":  _image_extractor,
+    ".webp": _image_extractor,
+    ".bmp":  _image_extractor,
+}
 
 
 def dispatch_by_ext(file_path: Path) -> "PdfExtractor | DocxExtractor | MarkdownExtractor | PlainTextExtractor | HtmlExtractor":

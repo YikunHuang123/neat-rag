@@ -56,6 +56,21 @@ class UpdatePermissionsRequest(BaseModel):
     can_chat: bool = True
 
 
+class CreateInviteRequest(BaseModel):
+    owner: str
+    expires_in_days: int = 7
+
+
+class InviteSummary(BaseModel):
+    id: str
+    token: str
+    owner: str
+    used: bool
+    used_at: Optional[str]
+    expires_at: str
+    created_at: str
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/keys", response_model=CreateKeyResponse, status_code=201)
@@ -97,7 +112,10 @@ async def delete_api_key(
 ):
     """Revoke an API key by its ID."""
     repo = ApiKeyRepository(conn)
-    await repo.delete_key(key_id)
+    try:
+        await repo.delete_key(key_id)
+    except RecordNotFoundError:
+        raise HTTPException(status_code=404, detail=f"API key '{key_id}' not found.")
     logger.info("API key revoked", key_id=key_id)
 
 
@@ -134,21 +152,6 @@ async def update_key_permissions(
 
 
 # ── Invite token endpoints ────────────────────────────────────────────────────
-
-class CreateInviteRequest(BaseModel):
-    owner: str
-    expires_in_days: int = 7
-
-
-class InviteSummary(BaseModel):
-    id: str
-    token: str
-    owner: str
-    used: bool
-    used_at: Optional[str]
-    expires_at: str
-    created_at: str
-
 
 @router.post("/invites", response_model=InviteSummary, status_code=201)
 async def create_invite(

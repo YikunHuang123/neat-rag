@@ -10,11 +10,26 @@ Multi-Query
     Generate N paraphrases of the query, retrieve with each independently,
     and merge the ranked lists via Reciprocal Rank Fusion (RRF).
 """
-from neat_rag.config import settings
+from typing import Optional
+
+from pydantic_ai import Agent
+
 from neat_rag.logger import get_logger
 from neat_rag.models import SearchHit
 
 logger = get_logger(__name__)
+
+# Lazily-initialised singleton — shares the provider config from providers/llm.py
+# so any LLM_PROVIDER setting is honoured, including Anthropic and local models.
+_rewrite_agent: Optional[Agent] = None
+
+
+def _get_rewrite_agent() -> Agent:
+    global _rewrite_agent
+    if _rewrite_agent is None:
+        from neat_rag.providers.llm import get_llm
+        _rewrite_agent = Agent(get_llm())
+    return _rewrite_agent
 
 _HYDE_PROMPT = """\
 Write a short passage (2–4 sentences) that directly answers the following question.
@@ -36,46 +51,10 @@ Phrasings:"""
 
 
 async def _llm_complete(prompt: str) -> str:
-    """Single LLM completion call for query rewriting. Uses the configured LLM_PROVIDER."""
-    provider = settings.LLM_PROVIDER.lower()
-    messages = [{"role": "user", "content": prompt}]
-
-    if provider in ("openai", "gemini", "ollama", "deepseek"):
-        import openai  # type: ignore[import]
-
-        if provider == "openai":
-            base_url, api_key = None, settings.OPENAI_API_KEY
-        elif provider == "gemini":
-            base_url, api_key = settings.GEMINI_BASE_URL, settings.GEMINI_API_KEY
-        elif provider == "deepseek":
-            base_url = f"{settings.DEEPSEEK_BASE_URL.rstrip('/')}/v1" if not settings.DEEPSEEK_BASE_URL.endswith("/v1") else settings.DEEPSEEK_BASE_URL
-            api_key = settings.DEEPSEEK_API_KEY
-        else:  # ollama
-            base_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
-            api_key = settings.OLLAMA_API_KEY
-
-        client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
-        resp = await client.chat.completions.create(
-            model=settings.LLM_MODEL,
-            messages=messages,
-            temperature=0.3,
-            max_tokens=512,
-        )
-        return resp.choices[0].message.content or ""
-
-    if provider == "anthropic":
-        import anthropic  # type: ignore[import]
-
-        client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        resp = await client.messages.create(
-            model=settings.LLM_MODEL,
-            max_tokens=512,
-            messages=messages,
-        )
-        return resp.content[0].text
-
-    logger.warning("LLM_PROVIDER not supported for rewriting, skipping", provider=provider)
-    return ""
+    """Single LLM completion for query rewriting. Delegates to the configured provider via providers/llm.py."""
+    agent = _get_rewrite_agent()
+    result = await agent.run(prompt)
+    return result.output or ""
 
 
 async def hyde_rewrite(query: str) -> str:

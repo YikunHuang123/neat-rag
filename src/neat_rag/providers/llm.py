@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -129,7 +129,7 @@ def get_llm_with_override(
         )
 
 
-def get_langchain_llm(provider: str = None, model: str = None) -> Any:
+def get_langchain_llm(provider: Optional[str] = None, model: Optional[str] = None) -> Any:
     """
     Return a LangChain-compatible ChatModel instance (BaseChatModel).
     Used for evaluation (ragas) and other LangChain-based utilities.

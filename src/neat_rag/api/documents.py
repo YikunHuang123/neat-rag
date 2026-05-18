@@ -155,11 +155,10 @@ async def update_document(
         await doc_repo.update_metadata(document_id, body.metadata)
     except RecordNotFoundError:
         raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
-    doc = await doc_repo.get_document(document_id, user_id=owner)
+    doc = await doc_repo.get_document(document_id, user_id=doc_scope(owner))
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
     return _to_doc_response(doc)
-  # type: ignore[arg-type]
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────

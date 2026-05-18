@@ -41,12 +41,13 @@ def _make_override_agent(
     return ag
 
 
-async def _update_title(session_id: str, user_message: str) -> None:
-    """Background task: generate a title and persist it."""
+async def _update_title(session_id: str, user_message: str) -> str:
+    """Generate a session title, persist it, and return it."""
     title = await generate_session_title(user_message)
     async with pg_pool.get_connection() as conn:
         await SessionRepository(conn).update_session_title(session_id, title)
     logger.info("Session title updated", session_id=session_id, title=title)
+    return title
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -59,10 +60,8 @@ async def chat(
 ):
     """Blocking chat — waits for the full agent response before returning."""
     session_repo = SessionRepository(conn)
-    session = await session_repo.get_session(body.session_id)
+    session = await session_repo.get_session(body.session_id, user_id=owner)
     if session is None:
-        raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
-    if owner is not None and session.user_id != owner:
         raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
 
     override_agent = None
@@ -86,7 +85,10 @@ async def chat(
     )
 
     if session.title == "New Chat":
-        asyncio.create_task(_update_title(body.session_id, body.message))
+        task = asyncio.create_task(_update_title(body.session_id, body.message))
+        task.add_done_callback(
+            lambda t: logger.error("title update failed", error=str(t.exception())) if t.exception() else None
+        )
 
     return ChatResponse(
         session_id=body.session_id,
@@ -209,10 +211,7 @@ async def chat_stream(
 
         new_title: str | None = None
         if session.title == "New Chat":
-            new_title = await generate_session_title(body.message)
-            async with pg_pool.get_connection() as title_conn:
-                await SessionRepository(title_conn).update_session_title(body.session_id, new_title)
-            logger.info("Session title updated", session_id=body.session_id, title=new_title)
+            new_title = await _update_title(body.session_id, body.message)
 
         yield f"data: {json.dumps({'type': 'done', 'message_id': msg.id, 'citations': citation_data, 'title': new_title})}\n\n"
         yield "data: [DONE]\n\n"

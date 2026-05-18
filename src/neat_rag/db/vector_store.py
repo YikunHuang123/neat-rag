@@ -73,6 +73,7 @@ class VectorStoreBase(ABC):
         query: str,
         top_k: int,
         user_id: Optional[str],
+        text_weight: float = 0.3,
     ) -> List[SearchHit]:
         """Hybrid search: dense vector + keyword recall, fused by score."""
 

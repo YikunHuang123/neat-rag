@@ -86,7 +86,7 @@ class JobListResponse(BaseModel):
 # --- Sessions ---
 
 class SessionCreateRequest(BaseModel):
-    user_id: Optional[str] = None
+    # user_id: Optional[str] = None
     title: str = "New Chat"
 
 
