@@ -180,6 +180,21 @@ class Settings(BaseSettings):
     RATE_LIMIT_DEFAULT: str = "60/minute"
     RATE_LIMIT_CHAT: str = "10/minute"
 
+    # --- Ingestion Limits ---
+    # Hard wall-clock limit for a single file extraction (seconds).
+    # asyncio.wait_for raises TimeoutError → job is marked FAILED instead of hanging forever.
+    EXTRACTION_TIMEOUT_SECONDS: int = 600
+
+    # images_scale fed to docling PdfPipelineOptions.  The default upstream value is 2.0
+    # (4× the pixel area), which multiplies MPS unified-memory pressure on large PDFs.
+    # 1.5 gives SmolVLM sufficient resolution while halving memory vs. 2.0.
+    PDF_IMAGES_SCALE: float = 1.5
+
+    # Auto-disable SmolVLM picture-description for PDFs with more pages than this.
+    # SmolVLM runs one inference pass per image/figure on the page; costs scale linearly.
+    # Set to 0 to always disable; set to a large number to always enable.
+    PDF_DISABLE_IMAGES_OVER_PAGES: int = 10
+
     # --- Image Support ---
     IMAGE_STORAGE_PATH: str = "./data/images"
 

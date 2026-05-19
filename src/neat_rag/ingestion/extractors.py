@@ -22,40 +22,92 @@ class PdfExtractor:
         self._include_images = include_images
         self._include_tables = include_tables
         self._images_scale = images_scale
-        self._converter = None  # lazy init — docling is slow to import
+        self._converter = None           # lazy init with images/OCR
+        self._converter_no_images = None  # lazy init without SmolVLM (fast path)
 
-    def _get_converter(self):
-        if self._converter is None:
-            from docling.document_converter import DocumentConverter, PdfFormatOption
-            from docling.datamodel.base_models import InputFormat
-            from docling.datamodel.pipeline_options import PdfPipelineOptions
+    def _build_converter(self, include_images: bool):
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from neat_rag.config import settings
 
-            opts = PdfPipelineOptions()
-            opts.do_ocr = self._enable_ocr
-            opts.do_picture_description = self._include_images
-            opts.do_table_structure = self._include_tables
-            opts.images_scale = self._images_scale
+        opts = PdfPipelineOptions()
+        opts.do_ocr = self._enable_ocr
+        opts.do_picture_description = include_images
+        opts.do_table_structure = self._include_tables
+        opts.images_scale = settings.PDF_IMAGES_SCALE
 
-            if self._include_images or self._enable_ocr:
-                logger.info(
-                    "🚀 Initializing Docling models... If this is the first run, it may download ~1GB of weights (SmolVLM/OCR). "
-                    "This might take several minutes depending on your network speed.",
-                    include_images=self._include_images,
-                    enable_ocr=self._enable_ocr
-                )
-
-            self._converter = DocumentConverter(
-                format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
+        if include_images or self._enable_ocr:
+            logger.info(
+                "Initializing Docling models... If this is the first run, it may download "
+                "~1GB of weights (SmolVLM/OCR). This might take several minutes.",
+                include_images=include_images,
+                enable_ocr=self._enable_ocr,
             )
-        return self._converter
+
+        return DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)}
+        )
+
+    def _get_converter(self, include_images: bool):
+        if include_images:
+            if self._converter is None:
+                self._converter = self._build_converter(include_images=True)
+            return self._converter
+        else:
+            if self._converter_no_images is None:
+                self._converter_no_images = self._build_converter(include_images=False)
+            return self._converter_no_images
+
+    def _quick_page_count(self, file_path: Path) -> int:
+        """Return PDF page count without doing a full parse. Returns 0 on failure."""
+        try:
+            from pypdf import PdfReader
+            return len(PdfReader(str(file_path), strict=False).pages)
+        except Exception:
+            return 0
 
     def extract(self, file_path: Path) -> Tuple[str, Dict[str, Any]]:
         """Return (markdown_text, metadata) for a PDF file."""
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
         try:
+            from neat_rag.config import settings
+
+            # Decide whether to run SmolVLM for this specific file.
+            # Large PDFs saturate MPS unified memory and cause silent slowdowns;
+            # auto-disable image description above the configured page threshold.
+            include_images = self._include_images
+            page_count = self._quick_page_count(file_path)
+            if include_images and page_count > 0:
+                threshold = settings.PDF_DISABLE_IMAGES_OVER_PAGES
+                if page_count > threshold:
+                    include_images = False
+                    logger.warning(
+                        "Image description auto-disabled: PDF exceeds page threshold",
+                        file=file_path.name,
+                        pages=page_count,
+                        threshold=threshold,
+                    )
+                else:
+                    logger.info(
+                        "Image description enabled",
+                        file=file_path.name,
+                        pages=page_count,
+                        threshold=threshold,
+                    )
+
+            logger.info(
+                "Starting docling conversion",
+                file=file_path.name,
+                pages=page_count or "unknown",
+                include_images=include_images,
+                include_tables=self._include_tables,
+                images_scale=settings.PDF_IMAGES_SCALE,
+            )
+
             t0 = time.time()
-            result = self._get_converter().convert(str(file_path))
+            result = self._get_converter(include_images).convert(str(file_path))
             elapsed = round(time.time() - t0, 2)
             doc = result.document
             content = doc.export_to_markdown()

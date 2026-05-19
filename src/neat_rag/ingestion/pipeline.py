@@ -77,7 +77,25 @@ class IngestionPipeline:
             # entire async event loop for all concurrent requests.
             await _update_job(self.pg_pool, job_id, 0.1, JobStatus.PROCESSING)
             extractor = dispatch_by_ext(file_path)
-            content, metadata = await asyncio.to_thread(extractor.extract, file_path)
+
+            # Watchdog: log a heartbeat every 30 s so the operator can see
+            # that extraction is alive even when docling produces no output.
+            watchdog = asyncio.create_task(_extraction_watchdog(file_path))
+            try:
+                content, metadata = await asyncio.wait_for(
+                    asyncio.to_thread(extractor.extract, file_path),
+                    timeout=settings.EXTRACTION_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                raise IngestionError(
+                    f"Extraction timed out after {settings.EXTRACTION_TIMEOUT_SECONDS}s "
+                    f"for '{file_path.name}'. "
+                    "Consider disabling image description (PDF_DISABLE_IMAGES_OVER_PAGES) "
+                    "or increasing EXTRACTION_TIMEOUT_SECONDS."
+                )
+            finally:
+                watchdog.cancel()
+
             if not content.strip():
                 raise IngestionError(f"Extraction produced empty content for '{file_path.name}'")
             logger.info("Extraction done", file=file_path.name, content_len=len(content))
@@ -260,6 +278,23 @@ def _build_image_chunks(metadata: dict) -> List[RawChunk]:
             metadata={"chunk_type": "image_ocr", "image_path": image_path},
         ))
     return chunks
+
+
+async def _extraction_watchdog(file_path: Path, interval: float = 30.0) -> None:
+    """Log a heartbeat every `interval` seconds while extraction is running.
+
+    Docling's convert() produces no intermediate output; without this, a slow
+    large-PDF run is indistinguishable from a hung process in the server logs.
+    """
+    elapsed = 0.0
+    while True:
+        await asyncio.sleep(interval)
+        elapsed += interval
+        logger.info(
+            "Extraction in progress (still running)",
+            file=file_path.name,
+            elapsed_s=elapsed,
+        )
 
 
 async def _update_job(
