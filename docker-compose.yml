@@ -48,84 +48,86 @@ services:
 
   # ── API (FastAPI + uvicorn) ────────────────────────────────────────────────
   api:
-    build:
-      context: .
-      dockerfile: ./docker/Dockerfile
-      target: api
-    image: neat-rag-api
-    container_name: neat-rag-api
-    ports:
-      - "${API_PORT:-8058}:8058"
-    env_file: ./.env
-    environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      REDIS_URL: redis://redis:6379/0
-      QDRANT_HOST: qdrant
-      QDRANT_PORT: "6333"
-      VECTOR_STORE_BACKEND: qdrant
-      IMAGE_STORAGE_PATH: /app/data/images
-      HF_HOME: /app/data/huggingface
-      HF_TOKEN: ${HF_TOKEN:-}
+   build:
+     context: .
+     dockerfile: ./docker/Dockerfile
+     target: api
+   image: neat-rag-api
+   container_name: neat-rag-api
+   ports:
+     - "${API_PORT:-8058}:8058"
+   env_file: ./.env
+   environment:
+     DB_HOST: postgres
+     DB_PORT: "5432"
+     REDIS_URL: redis://redis:6379/0
+     QDRANT_HOST: qdrant
+     QDRANT_PORT: "6333"
+     VECTOR_STORE_BACKEND: qdrant
+     IMAGE_STORAGE_PATH: /app/data/images
+     HF_HOME: /app/model_cache
+     SENTENCE_TRANSFORMERS_HOME: /app/model_cache
+     HF_HUB_OFFLINE: "0"
 
-      PYTHONPATH: /app/src
+     PYTHONPATH: /app/src
 
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8058/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    restart: unless-stopped
+   depends_on:
+     postgres:
+       condition: service_healthy
+     redis:
+       condition: service_healthy
+     qdrant:
+       condition: service_started
+   healthcheck:
+     test: ["CMD", "curl", "-f", "http://localhost:8058/health/live"]
+     interval: 10s
+     timeout: 5s
+     retries: 5
+     start_period: 20s
+   restart: unless-stopped
 
-    volumes:
-      - ./src:/app/src
-      - imgdata:/app/data/images
-      - hf_data:/app/data/huggingface
+   volumes:
+     - ./src:/app/src
+     - imgdata:/app/data/images
+     - hf_data:/app/data/huggingface
 
 
   # ── Worker (arq background tasks) ─────────────────────────────────────────
   worker:
-    build:
-      context: .
-      dockerfile: ./docker/Dockerfile
-      target: worker
-    image: neat-rag-worker
-    container_name: neat-rag-worker
-    env_file: ./.env
-    environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      REDIS_URL: redis://redis:6379/0
-      QDRANT_HOST: qdrant
-      QDRANT_PORT: "6333"
-      VECTOR_STORE_BACKEND: qdrant
-      IMAGE_STORAGE_PATH: /app/data/images
-      HF_HOME: /app/data/huggingface
-      HF_TOKEN: ${HF_TOKEN:-}
+   build:
+     context: .
+     dockerfile: ./docker/Dockerfile
+     target: worker
+   image: neat-rag-worker
+   container_name: neat-rag-worker
+   env_file: ./.env
+   environment:
+     DB_HOST: postgres
+     DB_PORT: "5432"
+     REDIS_URL: redis://redis:6379/0
+     QDRANT_HOST: qdrant
+     QDRANT_PORT: "6333"
+     VECTOR_STORE_BACKEND: qdrant
+     IMAGE_STORAGE_PATH: /app/data/images
+     HF_HOME: /app/model_cache
+     SENTENCE_TRANSFORMERS_HOME: /app/model_cache
+     HF_HUB_OFFLINE: "0"
 
-      PYTHONPATH: /app/src
+     PYTHONPATH: /app/src
 
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
-    restart: unless-stopped
+   depends_on:
+     postgres:
+       condition: service_healthy
+     redis:
+       condition: service_healthy
+     qdrant:
+       condition: service_started
+   restart: unless-stopped
 
-    volumes:
-      - ./src:/app/src
-      - imgdata:/app/data/images
-      - hf_data:/app/data/huggingface
+   volumes:
+     - ./src:/app/src
+     - imgdata:/app/data/images
+     - hf_data:/app/data/huggingface
 
   # ── UI (Streamlit) ────────────────────────────────────────────────────────
   ui:
@@ -139,13 +141,13 @@ services:
       - "${UI_PORT:-8501}:8501"
     env_file: ./.env
     environment:
-      API_URL: http://api:8058
+      API_URL: http://host.docker.internal:8058
 
       PYTHONPATH: /app/src
 
     depends_on:
-      api:
-        condition: service_healthy
+     api:
+       condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
       interval: 10s

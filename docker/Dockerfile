@@ -11,11 +11,17 @@ WORKDIR /build
 # Copy only the dependency manifest first for better layer caching.
 COPY pyproject.toml README.md ./
 
-# Create a virtual environment and install all project dependencies.
-# --mount=type=cache keeps downloaded wheels between builds so re-installs are
-# incremental even when pyproject.toml changes.
+# Use TARGETARCH to determine the correct PyTorch backend
+ARG TARGETARCH
+
+# Create a virtual environment and dynamically install PyTorch before other dependencies.
+# If we are on ARM64 (like Mac M1), we MUST force the CPU version to avoid downloading 6GB of useless CUDA binaries.
+# If we are on AMD64, we let it download the default (which includes CUDA for GPU support).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /venv && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+        uv pip install --python /venv/bin/python torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu; \
+    fi && \
     uv pip install --python /venv/bin/python -r pyproject.toml
 
 # Copy source code after dependencies so code edits don't invalidate the
@@ -56,10 +62,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user for security.
+# We create the cache directories here and set ownership ONCE.
 RUN addgroup --system appgroup && \
     adduser --system --ingroup appgroup --home /home/appuser appuser && \
-    mkdir -p /home/appuser /app/data/images /app/data/huggingface && \
-    chown -R appuser:appgroup /home/appuser /app/data/images /app/data/huggingface
+    mkdir -p /home/appuser /app/data/images /app/data/huggingface /app/model_cache && \
+    chown -R appuser:appgroup /home/appuser /app/data/images /app/data/huggingface /app/model_cache
 
 WORKDIR /app
 
@@ -67,16 +74,22 @@ WORKDIR /app
 COPY --from=builder /venv /venv
 COPY --from=builder /build/src /app/src
 
-# Also copy migration files so `alembic upgrade head` works in the api container.
-COPY alembic.ini /app/
-COPY migrations/ /app/migrations/
-
+# Ensure the virtual environment's binaries are used.
 ENV PATH="/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/appuser
 
+# Set model cache locations
+ENV SENTENCE_TRANSFORMERS_HOME=/app/model_cache \
+    HF_HOME=/app/model_cache
+
+# Switch to the non-root user.
 USER appuser
+
+# Also copy migration files so `alembic upgrade head` works in the api container.
+COPY alembic.ini /app/
+COPY migrations/ /app/migrations/
 
 
 # ─────────────────────────────────────────────────────────────────────────────
