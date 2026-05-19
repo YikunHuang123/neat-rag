@@ -268,7 +268,9 @@ streamlit run src/neat_rag/ui.py
 ## 💡 Usage
 
 ### Uploading a document
-<img width="2052" height="968" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/6f6b8547-a66a-4765-af7c-13d8b265c9b6" />
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/6f6b8547-a66a-4765-af7c-13d8b265c9b6" />
+</p>
 
 ```bash
 curl -X POST http://localhost:8058/documents/upload \
@@ -285,7 +287,10 @@ curl -X POST http://localhost:8058/documents/upload \
 ```
 
 ### Checking ingestion progress
-<img width="2482" height="1036" alt="neat_rag_tasks" src="https://github.com/user-attachments/assets/e963542e-12b7-4f74-90b0-b7cfc4d9aa50" />
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/e963542e-12b7-4f74-90b0-b7cfc4d9aa50" />
+</p>
+
 
 ```bash
 curl http://localhost:8058/jobs/3f2a1b... \
@@ -339,11 +344,23 @@ data: {"done": true, "citations": [...]}
 
 ### Issuing an invite token (admin)
 
-<img width="1263" height="718" alt="image" src="https://github.com/user-attachments/assets/01240b78-8906-41f5-b52c-506838577107" />
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/01240b78-8906-41f5-b52c-506838577107" />
+  <br>
+  <sub><i>Administrator generates invitation code</i></sub>
+</p>
 
-<img width="921" height="816" alt="image" src="https://github.com/user-attachments/assets/4104b4a3-4c1e-4f53-abad-f7db7894cb69" />
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/4104b4a3-4c1e-4f53-abad-f7db7894cb69" />
+  <br>
+  <sub><i>The user obtains his login api_key through the invitation code (each invitation code can only be used once)</i></sub>
+</p>
 
-<img width="1015" height="733" alt="image" src="https://github.com/user-attachments/assets/0ed38374-fb28-4ce0-bc9d-f48405a3eeeb" />
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/0ed38374-fb28-4ce0-bc9d-f48405a3eeeb" />
+  <br>
+  <sub><i>Users can enter their api_key here to open a conversation.</i></sub>
+</p>
 
 
 ```bash
