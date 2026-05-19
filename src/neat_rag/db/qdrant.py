@@ -34,7 +34,11 @@ from qdrant_client.models import (
     SparseVector,
     SparseVectorParams,
     VectorParams,
+    VectorParamsDiff,
+    DenseVectorConfig,
+    DenseVectorNameConfig,
 )
+
 
 from neat_rag.config import settings
 from neat_rag.db.vector_store import VectorStoreBase
@@ -186,14 +190,15 @@ class QdrantStore(VectorStoreBase):
                 )
             return
 
-        await self._client_safe.update_collection(
+        await self._client_safe.create_vector_name(
             collection_name=self._collection,
-            vectors_config={
-                self._vec_name: VectorParams(
+            vector_name=self._vec_name,
+            vector_name_config=DenseVectorNameConfig(
+                dense=DenseVectorConfig(
                     size=settings.EMBEDDING_DIM,
                     distance=Distance.COSINE,
                 )
-            },
+            ),
         )
         logger.info(
             "Named vector slot added for new model",
