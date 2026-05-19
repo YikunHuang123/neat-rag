@@ -141,7 +141,11 @@ async def _run_advanced_search(
             hits = hits[:limit]
 
         if not hits:
-            return "No relevant information found in the knowledge base."
+            return (
+                "No relevant information found in the knowledge base. "
+                "CRITICAL: Do NOT use any [n] citation markers in your response, "
+                "as there is no context to reference."
+            )
 
         # 5. Citation Formatting — start numbering after already-accumulated citations
         offset = len(ctx.deps.citations)
