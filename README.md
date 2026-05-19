@@ -1,13 +1,15 @@
 # 🔍 Neat-RAG
 
-**A production-ready Retrieval-Augmented Generation (RAG) backend** that turns private document collections — including **PDF, DOCX, Markdown, HTML, TXT, and images** — into a queryable knowledge base. It offers ultimate flexibility by supporting both **high-performance cloud LLMs** (OpenAI, Gemini, Anthropic, DeepSeek) and **fully private, offline local models** via Ollama. Features include hybrid search, agentic tool routing, automatic inline citations, and a self-service API-key onboarding flow.
+**A production-ready Agentic Retrieval-Augmented Generation (RAG)** that turns private document collections — including **PDF, DOCX, Markdown, HTML, TXT, and images** — into a queryable knowledge base. It offers ultimate flexibility by supporting both **high-performance cloud LLMs** (OpenAI, Gemini, Anthropic, DeepSeek) and **fully private, offline local models** via Ollama. Features include hybrid search, agentic tool routing, automatic inline citations, and a self-service API-key onboarding flow.
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Pydantic AI](https://img.shields.io/badge/Pydantic_AI-Agent-E92063)](https://ai.pydantic.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Qdrant](https://img.shields.io/badge/Qdrant-Vector%20DB-0080FF?logo=qdrant&logoColor=white)](https://qdrant.tech/)
+[![LLM Providers](https://img.shields.io/badge/LLM_Providers-Ollama_|_OpenAI_|_Anthropic_|_Google_|_DeepSeek-orange)](#-tech-stack)
+
 
 ---
 
@@ -19,6 +21,7 @@
 - [Installation](#-installation)
 - [Usage](#-usage)
 - [Project Structure](#-project-structure)
+- [Follow-up development plan](#-follow-up-development-plan)
 - [Contributing](#-contributing)
 - [License & Contact](#-license--contact)
 
@@ -26,22 +29,18 @@
 
 ## ✨ Features
 
-- **Multi-Format Document Ingestion** — PDF, DOCX, Markdown, HTML, TXT, and images (with Tesseract OCR + VLM descriptions); documents are processed asynchronously via a Redis/arq background worker
-- **Pluggable LLM Providers** — OpenAI, Google Gemini, Anthropic, DeepSeek, and Ollama, all switchable via a single environment variable
-- **Pluggable Embedding Providers** — OpenAI, Gemini, Ollama, or any OpenAI-compatible endpoint; embedding dimension is fully configurable
-- **Hybrid Search** — Combines dense vector retrieval (cosine similarity) with sparse BM25 full-text search; weights are tunable at runtime
-- **Agentic RAG Orchestration** — A Pydantic AI agent selects among `hybrid_search`, `vector_search`, `get_document`, and `list_documents` tools to answer multi-hop questions
-- **Retrieval Techniques** — HyDE query rewriting, Multi-Query decomposition, and Reciprocal Rank Fusion (RRF) for improved recall
-- **Smart Reranking** — Local BGE CrossEncoder or Cohere API reranking to boost precision before the LLM call
-- **Automatic Inline Citations** — Every answer includes `[1][2]` references with direct links back to source chunks and documents
-- **Streaming & Blocking Responses** — SSE streaming (`/chat/stream`) and synchronous (`/chat`) endpoints; both work with conversation memory
-- **Multi-Turn Session Memory** — Session-scoped conversation history with auto-generated titles; full CRUD management via REST API
-- **Dual Vector Store Backends** — Switch between an integrated **pgvector** (PostgreSQL) backend and a dedicated **Qdrant** instance with zero code changes
-- **Background Ingestion Jobs** — Job status and progress tracking via `/jobs/{id}`; the worker runs independently for non-blocking uploads
-- **Self-Service API Key Issuance** — Admins generate single-use invite tokens; users redeem them for personal API keys without manual provisioning
-- **Role-Based Access Control** — `admin`-scoped keys unlock `/admin/*` routes; regular keys are rate-limited via slowapi
-- **RAGAS Evaluation** — Built-in evaluation helpers for Faithfulness, Answer Relevancy, and Context Precision metrics
-- **Streamlit UI** — Chat interface with a document library. Admin interface, user management interface, job monitor, and session sidebar
+| Feature | Description                                                                                            |
+|---|--------------------------------------------------------------------------------------------------------|
+| 📄 Multi-Format Ingestion | Uploads and indexes PDF, DOCX, Markdown, HTML, TXT, and Images files.                                  |
+| 🔌 Flexible LLM Support | Works with any major cloud provider (OpenAI, Gemini, Anthropic, DeepSeek) or fully offline via Ollama. |
+| 🔀 Hybrid Search | Finds relevant content by combining semantic vector search with keyword-based full-text search.        |
+| 🎯 Smart Retrieval | Improves answer quality through query rewriting, multi-query decomposition, and neural reranking.      |
+| 🔗 Inline Citations | Backs every answer with numbered `[1][2]` source references linked to the exact document passage.      |
+| 🧠 Conversation Memory | Keeps track of chat history within a session for natural, multi-turn dialogue.                         |
+| ⚡ Streaming Chat | Streams answers token-by-token for a responsive, real-time chat experience.                            |
+| 🔑 User & Access Management | Controls who can access the system through an admin-managed API key and invite system.                 |
+| 📊 Quality Evaluation | Measures answer quality with built-in RAGAS metrics (Faithfulness, Relevancy, Precision).              |
+| 🖥️ Web UI | Provides a Streamlit interface for chatting, managing documents, and monitoring ingestion jobs.        |
 
 ---
 
@@ -90,7 +89,6 @@ Admin                          New User
   │                        Uses X-API-Key header
 ```
 
-> **Screenshots coming soon.** The `docs/` folder will contain terminal session recordings and UI screenshots once uploaded.
 
 ---
 
@@ -436,6 +434,10 @@ neat_rag/
     - **Offline Quality Assessment**: Systematic analysis of user feedback to identify and fix failure modes in the RAG pipeline.
     - **RLHF Integration**: Utilizing user preferences to fine-tune response generation and alignment.
     - **Dynamic Re-ranking**: Implementing a feedback-aware retrieval layer that boosts the scores of document snippets that have historically received positive user ratings.
+- **LangGraph-Powered Advanced Retrieval** — Introduce [LangGraph](https://github.com/langchain-ai/langgraph) to replace the current fixed-step pipeline with a stateful, graph-based workflow, enabling three advanced retrieval strategies:
+    - **Adaptive RAG**: After each retrieval attempt, a dedicated judge node evaluates result quality. If the retrieved chunks are insufficient, the graph loops back and retries with an alternative strategy (e.g., expanded queries or a different search mode) before proceeding to reranking and generation.
+    - **Plan-and-Execute (Multi-step Reasoning)**: For complex questions, a planner node first decomposes the query into sub-questions. Each sub-question is then retrieved and answered independently, and the results are synthesised into a final, coherent response — improving accuracy across multi-document reasoning tasks.
+    - **Corrective RAG (CRAG)**: After generating an answer, a verification node checks whether the response is grounded in the retrieved documents. If confidence is low, the graph triggers a fallback (e.g., web search or broader retrieval) before returning the final answer, reducing hallucinations on knowledge-boundary queries.
 
 ---
 
