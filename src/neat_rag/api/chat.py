@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -32,18 +32,21 @@ def _make_override_agent(
     model: str,
     api_key: str = "",
     base_url: str = "",
-) -> Agent:
-    """Build a one-off agent with a custom LLM; reuses the singleton's retrievers."""
+) -> tuple[Agent, Any]:
+    """Build a one-off agent with a custom LLM; reuses the singleton's retrievers.
+
+    Returns (agent, llm) so the caller can reuse the same llm for title generation.
+    """
     llm = get_llm_with_override(provider, model, api_key, base_url)
     ag: Agent = Agent(llm, deps_type=AgentContext, system_prompt=build_system_prompt())
     for tool in AGENT_TOOLS:
         ag.tool(tool)
-    return ag
+    return ag, llm
 
 
-async def _update_title(session_id: str, user_message: str) -> str:
+async def _update_title(session_id: str, user_message: str, llm: Any = None) -> str:
     """Generate a session title, persist it, and return it."""
-    title = await generate_session_title(user_message)
+    title = await generate_session_title(user_message, llm=llm)
     async with pg_pool.get_connection() as conn:
         await SessionRepository(conn).update_session_title(session_id, title)
     logger.info("Session title updated", session_id=session_id, title=title)
@@ -65,9 +68,10 @@ async def chat(
         raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found.")
 
     override_agent = None
+    override_llm = None
     if body.llm_provider:
         try:
-            override_agent = _make_override_agent(
+            override_agent, override_llm = _make_override_agent(
                 body.llm_provider,
                 body.llm_model or "",
                 body.llm_api_key or "",
@@ -85,7 +89,7 @@ async def chat(
     )
 
     if session.title == "New Chat":
-        task = asyncio.create_task(_update_title(body.session_id, body.message))
+        task = asyncio.create_task(_update_title(body.session_id, body.message, llm=override_llm))
         task.add_done_callback(
             lambda t: logger.error("title update failed", error=str(t.exception())) if t.exception() else None
         )
@@ -134,9 +138,10 @@ async def chat_stream(
         # Always call get_agent() to ensure retrievers are initialised.
         _default_agent = get_agent()
 
+        stream_override_llm = None
         if body.llm_provider:
             try:
-                agent = _make_override_agent(
+                agent, stream_override_llm = _make_override_agent(
                     body.llm_provider,
                     body.llm_model or "",
                     body.llm_api_key or "",
@@ -211,7 +216,7 @@ async def chat_stream(
 
         new_title: str | None = None
         if session.title == "New Chat":
-            new_title = await _update_title(body.session_id, body.message)
+            new_title = await _update_title(body.session_id, body.message, llm=stream_override_llm)
 
         yield f"data: {json.dumps({'type': 'done', 'message_id': msg.id, 'citations': citation_data, 'title': new_title})}\n\n"
         yield "data: [DONE]\n\n"

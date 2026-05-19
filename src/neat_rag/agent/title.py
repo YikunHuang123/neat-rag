@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic_ai import Agent
 
 from neat_rag.logger import get_logger
@@ -29,10 +31,17 @@ def _get_title_agent() -> Agent:
     return _title_agent
 
 
-async def generate_session_title(user_message: str) -> str:
-    """Return a short LLM-generated title for the session, or 'New Chat' on failure."""
+async def generate_session_title(user_message: str, llm: Any = None) -> str:
+    """Return a short LLM-generated title for the session, or 'New Chat' on failure.
+
+    Pass ``llm`` to reuse the same model instance as the active chat request
+    (e.g. a per-request provider override). When omitted, the config default is used.
+    """
     try:
-        result = await _get_title_agent().run(user_message)
+        # Use a one-off agent when the caller supplies an explicit LLM so that
+        # title generation uses the same provider as the chat that triggered it.
+        agent = Agent(llm, system_prompt=_SYSTEM_PROMPT) if llm is not None else _get_title_agent()
+        result = await agent.run(user_message)
         title = result.output.strip().strip("\"'").strip()
         return title[:60] if title else "New Chat"
     except Exception as exc:
