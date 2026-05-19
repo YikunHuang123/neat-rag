@@ -10,6 +10,9 @@
 [![Qdrant](https://img.shields.io/badge/Qdrant-Vector%20DB-0080FF?logo=qdrant&logoColor=white)](https://qdrant.tech/)
 [![LLM Providers](https://img.shields.io/badge/LLM_Providers-Ollama_|_OpenAI_|_Anthropic_|_Google_|_DeepSeek-orange)](#-tech-stack)
 
+<video src="https://github.com/user-attachments/assets/69214298-2aef-4eca-b346-4ef35f4adb87" controls="controls" muted="muted" loop="loop" autoplay="autoplay" width="100%"></video>
+
+> ⭐️ **💖 If you like this project, a star would mean the world to me!**
 
 ---
 
