@@ -28,7 +28,6 @@ from qdrant_client.models import (
     FusionQuery,
     MatchValue,
     NamedSparseVector,
-    NamedVector,
     PointStruct,
     Prefetch,
     SparseIndexParams,
@@ -277,14 +276,15 @@ class QdrantStore(VectorStoreBase):
         top_k: int,
         user_id: Optional[str],
     ) -> List[SearchHit]:
-        results = await self._client_safe.search(
+        results = await self._client_safe.query_points(
             collection_name=self._collection,
-            query_vector=NamedVector(name=self._vec_name, vector=embedding),
-            query_filter=_build_filter(user_id),
+            query=embedding,
+            using=self._vec_name,
+            filter=_build_filter(user_id),
             limit=top_k,
             with_payload=True,
         )
-        return [_scored_to_hit(r) for r in results]
+        return [_scored_to_hit(r) for r in results.points]
 
     async def hybrid_search(
         self,
