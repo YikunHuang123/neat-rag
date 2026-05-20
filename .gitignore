@@ -126,9 +126,6 @@ venv.bak/
 .spyderproject
 .spyproject
 
-# Rope project settings
-.ropeproject
-
 # mkdocs documentation
 /site
 
@@ -155,3 +152,7 @@ documents/*.docx
 documents/*.txt
 documents/*.md
 documents/*.html
+
+# Custom ignores
+.claude/
+test_files/
