@@ -365,7 +365,7 @@ All API calls require the `X-API-Key` header. The **admin bootstrap key** (set a
 
 ### Uploading a document
 <p align="center">
-  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/6f6b8547-a66a-4765-af7c-13d8b265c9b6" />
+  <img width="80%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/6f6b8547-a66a-4765-af7c-13d8b265c9b6" />
 </p>
 
 ```bash
@@ -384,7 +384,7 @@ curl -X POST http://localhost:8058/documents/upload \
 
 ### Checking ingestion progress
 <p align="center">
-  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/e963542e-12b7-4f74-90b0-b7cfc4d9aa50" />
+  <img width="80%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/e963542e-12b7-4f74-90b0-b7cfc4d9aa50" />
 </p>
 
 
@@ -408,7 +408,7 @@ curl http://localhost:8058/jobs/3f2a1b... \
 ### Asking a question (blocking) - Support multi-round dialogue
 
 <p align="center">
-  <img width="70%" alt="neat_rag_chat" src="https://github.com/user-attachments/assets/f3bce90b-7042-49a6-810c-75726f0026ae" />
+  <img width="80%" alt="neat_rag_chat" src="https://github.com/user-attachments/assets/f3bce90b-7042-49a6-810c-75726f0026ae" />
   <br>
   <sub><i>Users can conduct multiple rounds of dialogue. Click the reference icon to view the original source passage.</i></sub>
 </p>
@@ -436,10 +436,6 @@ curl -X POST http://localhost:8058/chat \
 
 ### Streaming response (SSE)
 
-<p align="center">
-  <em>[图片：聊天界面中 AI 流式逐字输出回答的过程截图，展示回答尚未完成时光标闪烁、文字实时追加的效果]</em>
-</p>
-
 ```bash
 curl -N -X POST http://localhost:8058/chat/stream \
   -H "X-API-Key: admin" \   # Defined as ADMIN_BOOTSTRAP_KEY in .env
@@ -463,19 +459,19 @@ All admin endpoints require the `ADMIN_BOOTSTRAP_KEY` from `.env` (or an API key
 #### Invite Token Management
 
 <p align="center">
-  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/01240b78-8906-41f5-b52c-506838577107" />
+  <img width="80%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/01240b78-8906-41f5-b52c-506838577107" />
   <br>
   <sub><i>Administrator generates invitation code</i></sub>
 </p>
 
 <p align="center">
-  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/4104b4a3-4c1e-4f53-abad-f7db7894cb69" />
+  <img width="80%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/4104b4a3-4c1e-4f53-abad-f7db7894cb69" />
   <br>
   <sub><i>The user obtains their key by redeeming the invite (each token is single-use)</i></sub>
 </p>
 
 <p align="center">
-  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/0ed38374-fb28-4ce0-bc9d-f48405a3eeeb" />
+  <img width="80%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/0ed38374-fb28-4ce0-bc9d-f48405a3eeeb" />
   <br>
   <sub><i>Users enter their API key in the UI to start a conversation</i></sub>
 </p>
@@ -517,7 +513,7 @@ curl -X POST http://localhost:8058/auth/redeem \
 #### API Key Management
 
 <p align="center">
-  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/79470c73-4e48-4720-bf69-ee5a8b939aee" />
+  <img width="80%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/79470c73-4e48-4720-bf69-ee5a8b939aee" />
   <br>
   <sub><i>Administrators can check the key creation time and last usage time of the assigned user.</i></sub>
 </p>
@@ -552,7 +548,7 @@ curl -X PATCH "http://localhost:8058/admin/keys/{key_id}/permissions" \
 ## 🔐 Access Control & Permissions
 
 <p align="center">
-  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/d5d3b57b-ff7c-4ef7-a350-7448c73c5290" />
+  <img width="80%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/d5d3b57b-ff7c-4ef7-a350-7448c73c5290" />
   <br>
   <sub><i>Administrators can set the permissions to upload and delete the knowledge base and chat for the assigned users.</i></sub>
 </p>
