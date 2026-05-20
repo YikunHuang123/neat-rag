@@ -1,6 +1,6 @@
 # 🔍 Neat-RAG
 
-**A production-ready Agentic Retrieval-Augmented Generation (RAG)** that turns private document collections — including **PDF, DOCX, Markdown, HTML, TXT, and images** — into a queryable knowledge base. It offers ultimate flexibility by supporting both **high-performance cloud LLMs** (OpenAI, Gemini, Anthropic, DeepSeek) and **fully private, offline local models** via Ollama. Features include hybrid search, agentic tool routing, automatic inline citations, and a self-service API-key onboarding flow.
+**A production-ready Agentic Retrieval-Augmented Generation (RAG)** that turns private document collections — including **PDF, DOCX, Markdown, HTML, TXT, and Images** — into a queryable knowledge base. It offers ultimate flexibility by supporting both **high-performance cloud LLMs** (OpenAI, Gemini, Anthropic, DeepSeek) and **fully private, offline local models** via Ollama. Features include hybrid search, agentic tool routing, automatic inline citations, and a self-service API-key onboarding flow.
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -19,8 +19,9 @@
 ## 📋 Table of Contents
 
 - [Features](#-features)
-- [Demo & Visuals](#-demo--visuals)
+- [Architecture](#-architecture)
 - [Tech Stack](#-tech-stack)
+- [How It Works](#️-how-it-works)
 - [Installation](#-installation)
 - [Usage](#-usage)
 - [Access Control & Permissions](#-access-control--permissions)
@@ -112,14 +113,78 @@ Admin                          New User
 | **Schema Validation** | Pydantic v2 + pydantic-settings |
 | **DB Migrations** | Alembic |
 | **Background Jobs** | arq + Redis |
-| **Document Parsing** | docling (PDF/DOCX/HTML), python-docx, BeautifulSoup |
-| **OCR** | Tesseract (10+ languages) + OpenCV |
+| **Document Parsing** | docling (PDF/DOCX/HTML), python-docx, trafilatura |
+| **OCR** | pytesseract (10+ languages) + Pillow |
 | **Reranking** | sentence-transformers (BGE CrossEncoder), Cohere API |
 | **Chunking** | LangChain RecursiveCharacterTextSplitter + semantic chunker |
 | **Rate Limiting** | slowapi |
 | **Evaluation** | RAGAS |
 | **UI** | Streamlit |
 | **Containerisation** | Docker + Docker Compose (multi-stage build) |
+
+---
+
+## ⚙️ How It Works
+
+### Document Ingestion Pipeline
+
+When a file is uploaded, the API creates a job record and pushes it to a **Redis queue** via arq. The background worker picks it up and runs a four-stage pipeline:
+
+**1. Extract** — behaviour differs by file type:
+
+- **PDF**: docling converts the file to clean Markdown, preserving tables and structure. SmolVLM (a small vision-language model bundled in docling) additionally generates natural-language descriptions for embedded images and figures. For large PDFs, image description is auto-disabled above a configurable page threshold to prevent memory pressure.
+- **DOCX / HTML / Markdown / TXT**: parsed into plain text via python-docx, trafilatura, or a plain reader.
+- **Images (JPG / PNG / GIF / WebP / BMP)**: two extractions run independently:
+  - **SmolVLM description** (via Docling) — generates a natural-language description of the visual content. Effective for photos, diagrams, and charts where embedded text is absent.
+  - **OCR** (pytesseract, 10+ languages configurable via `OCR_LANGUAGES` in `.env`) — extracts verbatim text character by character. Effective for screenshots, scanned text, and tables.
+  
+  The original image file is also copied to persistent storage — required so the LLM can receive it at query time.
+
+**2. Chunk** — text documents are split by `RecursiveCharacterTextSplitter` (fixed overlap) or a semantic chunker. Images bypass the generic chunker entirely and always produce exactly **two targeted chunks**:
+
+| Chunk type | Content | Best for |
+|---|---|---|
+| `image_description` | SmolVLM natural-language description | Scenic photos, diagrams, charts |
+| `image_ocr` | pytesseract verbatim text | Screenshots, scanned tables, dense text |
+
+Both chunks carry an `image_path` pointer to the stored original. Either may be absent if its extractor produced no output, but at least one must exist for ingestion to succeed.
+
+**3. Embed** — all chunks are sent to the configured embedding provider (OpenAI / Gemini / Ollama) in a batch.
+
+**4. Store** — document metadata is committed to PostgreSQL first; then chunk vectors are written to the active vector store (pgvector or Qdrant). This order is intentional: a failed vector upsert leaves detectable orphan metadata (recoverable by re-indexing) rather than silent orphan vectors.
+
+The job status (`pending → processing → completed / failed`) and progress percentage are updated in real time so the UI can poll `GET /jobs/{job_id}`.
+
+**At query time**, image chunks retrieved by search are handled differently based on the LLM mode (set `LLM_MULTIMODAL` in `.env`):
+
+- **`LLM_MULTIMODAL=false`** — the description and OCR text are passed as plain context, like any other chunk. No vision capability required from the LLM.
+- **`LLM_MULTIMODAL=true`** — in addition to the text chunks, the raw image bytes are loaded from disk and injected as `BinaryContent` into the LLM message, allowing a vision-capable model (e.g. GPT-4o, Gemini 1.5, LLaVA, Qwen2-VL) to reason directly over the image. Each unique image is attached at most once per query.
+
+### Hybrid Search & Query Enhancement
+
+Before retrieval, the query optionally passes through two enhancement steps:
+
+- **HyDE (Hypothetical Document Embeddings)** — the LLM generates a short hypothetical answer, which is embedded and used as the search vector instead of the raw question embedding. This closes the vocabulary gap between short queries and long document passages.
+- **Multi-Query decomposition** — the LLM rewrites the question into several sub-questions, each retrieved independently. Results are merged via **Reciprocal Rank Fusion (RRF)**, which re-ranks candidates by their harmonic position across multiple result lists without needing score calibration.
+
+Hybrid retrieval then combines two signals:
+
+| Signal | Backend | Strength |
+|---|---|---|
+| Dense (semantic) | pgvector / Qdrant HNSW | Captures meaning and paraphrase |
+| Sparse (keyword) | PostgreSQL `tsvector` / BM25 | Exact term matching, rare tokens |
+
+Both result sets are merged again with RRF before reranking.
+
+### Neural Reranking
+
+The top-*k* merged candidates are passed to a **cross-encoder reranker** (BGE CrossEncoder locally, or the Cohere Rerank API). Unlike bi-encoders that embed query and document separately, a cross-encoder attends to both simultaneously — producing more accurate relevance scores at the cost of higher latency. Only the top-*n* reranked chunks proceed to generation.
+
+### Agentic Orchestration & Inline Citations
+
+The core of the system is a **Pydantic AI agent** configured with a set of tools (retrieval, summarisation, direct answer, etc.). Given a user question, the agent decides at runtime which tools to call and in what order, rather than following a fixed retrieval-then-generate pipeline. This lets it handle multi-step questions, refuse out-of-scope queries, or fall back to a general answer when retrieval confidence is low.
+
+After the LLM generates a response, a post-processing step scans the text for `[1]`, `[2]` markers, matches each back to the exact chunk that was retrieved, and returns a structured `citations` array alongside the answer — so every claim is traceable to its source passage.
 
 ---
 
@@ -255,7 +320,7 @@ uvicorn neat_rag.api:create_app --factory --host 0.0.0.0 --port 8058 --reload
 **7. Start the background worker** (separate terminal)
 
 ```bash
-arq neat_rag.worker.WorkerSettings
+arq neat_rag.ingestion.pipeline.WorkerSettings
 ```
 
 **8. Start the Streamlit UI** (separate terminal, optional)
@@ -284,10 +349,10 @@ The end-to-end journey from first deployment to a working knowledge base:
    └─ POST /auth/redeem  →  { api_key: "nrag_..." }
 
 4. User uploads documents
-   └─ POST /documents/upload  →  { job_id, document_id, status: "pending" }
+   └─ POST /documents/upload  →  { job_id, filename, message }
 
 5. Background worker ingests and indexes documents
-   └─ GET /jobs/{job_id}  →  { status: "completed", chunks_created: 42 }
+   └─ GET /jobs/{job_id}  →  { id, status: "completed", progress: 1.0 }
 
 6. User queries the knowledge base
    ├─ POST /chat         →  { answer, citations }          (blocking)
@@ -300,7 +365,7 @@ All API calls require the `X-API-Key` header. The **admin bootstrap key** (set a
 
 ### Uploading a document
 <p align="center">
-  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/6f6b8547-a66a-4765-af7c-13d8b265c9b6" />
+  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/6f6b8547-a66a-4765-af7c-13d8b265c9b6" />
 </p>
 
 ```bash
@@ -312,14 +377,14 @@ curl -X POST http://localhost:8058/documents/upload \
 ```json
 {
   "job_id": "3f2a1b...",
-  "document_id": "d9e8c7...",
-  "status": "pending"
+  "filename": "report.pdf",
+  "message": "File uploaded. Ingestion started."
 }
 ```
 
 ### Checking ingestion progress
 <p align="center">
-  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/e963542e-12b7-4f74-90b0-b7cfc4d9aa50" />
+  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/e963542e-12b7-4f74-90b0-b7cfc4d9aa50" />
 </p>
 
 
@@ -330,36 +395,42 @@ curl http://localhost:8058/jobs/3f2a1b... \
 
 ```json
 {
-  "job_id": "3f2a1b...",
+  "id": "3f2a1b...",
+  "filename": "report.pdf",
   "status": "completed",
-  "progress": 100,
-  "chunks_created": 42
+  "progress": 1.0,
+  "error": null,
+  "created_at": "2026-05-20T10:00:00Z",
+  "updated_at": "2026-05-20T10:02:30Z"
 }
 ```
 
 ### Asking a question (blocking) - Support multi-round dialogue
 
 <p align="center">
-    <img width="60%" alt="image" src="https://github.com/user-attachments/assets/f3bce90b-7042-49a6-810c-75726f0026ae" />
-  <em>Users can conduct multiple rounds of dialogue</em>
-  <em>Click the reference icon to view the original information it quoted.</em>
+  <img width="70%" alt="neat_rag_chat" src="https://github.com/user-attachments/assets/f3bce90b-7042-49a6-810c-75726f0026ae" />
+  <br>
+  <sub><i>Users can conduct multiple rounds of dialogue. Click the reference icon to view the original source passage.</i></sub>
 </p>
+
+> **Note:** `session_id` is required and must reference an existing session. Create one first via `POST /sessions`, then use its `id` here.
 
 ```bash
 curl -X POST http://localhost:8058/chat \
   -H "X-API-Key: admin" \   # Defined as ADMIN_BOOTSTRAP_KEY in .env
   -H "Content-Type: application/json" \
-  -d '{"question": "What are the key findings in the report?", "session_id": null}'
+  -d '{"message": "What are the key findings in the report?", "session_id": "s1a2b3..."}'
 ```
 
 ```json
 {
-  "answer": "The report highlights three main findings: ... [1][2]",
+  "session_id": "s1a2b3...",
+  "content": "The report highlights three main findings: ... [1][2]",
+  "message_id": "m9x8y7...",
   "citations": [
-    {"index": 1, "document_id": "d9e8c7...", "chunk_id": "...", "excerpt": "Revenue grew 12%..."},
-    {"index": 2, "document_id": "d9e8c7...", "chunk_id": "...", "excerpt": "Operating margin..."}
-  ],
-  "session_id": "s1a2b3..."
+    {"citation_number": 1, "document_title": "report.pdf", "document_source": "report.pdf", "content_snippet": "Revenue grew 12%..."},
+    {"citation_number": 2, "document_title": "report.pdf", "document_source": "report.pdf", "content_snippet": "Operating margin..."}
+  ]
 }
 ```
 
@@ -373,7 +444,7 @@ curl -X POST http://localhost:8058/chat \
 curl -N -X POST http://localhost:8058/chat/stream \
   -H "X-API-Key: admin" \   # Defined as ADMIN_BOOTSTRAP_KEY in .env
   -H "Content-Type: application/json" \
-  -d '{"question": "Summarise the methodology section.", "session_id": "s1a2b3..."}'
+  -d '{"message": "Summarise the methodology section.", "session_id": "s1a2b3..."}'
 ```
 
 ```
@@ -387,22 +458,24 @@ data: {"done": true, "citations": [...]}
 
 All admin endpoints require the `ADMIN_BOOTSTRAP_KEY` from `.env` (or an API key with `scopes: ["admin"]`).
 
+> The default administrator key is "admin".
+
 #### Invite Token Management
 
 <p align="center">
-  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/01240b78-8906-41f5-b52c-506838577107" />
+  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/01240b78-8906-41f5-b52c-506838577107" />
   <br>
   <sub><i>Administrator generates invitation code</i></sub>
 </p>
 
 <p align="center">
-  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/4104b4a3-4c1e-4f53-abad-f7db7894cb69" />
+  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/4104b4a3-4c1e-4f53-abad-f7db7894cb69" />
   <br>
-  <sub><i>The user obtains their API key by redeeming the invite (each token is single-use)</i></sub>
+  <sub><i>The user obtains their key by redeeming the invite (each token is single-use)</i></sub>
 </p>
 
 <p align="center">
-  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/0ed38374-fb28-4ce0-bc9d-f48405a3eeeb" />
+  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/0ed38374-fb28-4ce0-bc9d-f48405a3eeeb" />
   <br>
   <sub><i>Users enter their API key in the UI to start a conversation</i></sub>
 </p>
@@ -444,12 +517,11 @@ curl -X POST http://localhost:8058/auth/redeem \
 #### API Key Management
 
 <p align="center">
-  <em>[图片：管理员后台 API Keys 列表页截图，展示所有用户的密钥记录（owner、创建时间、最后使用时间、is_active 状态）]</em>
+  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/79470c73-4e48-4720-bf69-ee5a8b939aee" />
+  <br>
+  <sub><i>Administrators can check the key creation time and last usage time of the assigned user.</i></sub>
 </p>
 
-<p align="center">
-  <em>[图片：管理员对某条 API Key 执行权限修改后的界面截图，展示 can_upload / can_delete / can_chat 各开关的当前状态]</em>
-</p>
 
 ```bash
 # Create a key directly (bypasses the invite flow)
@@ -475,15 +547,15 @@ curl -X PATCH "http://localhost:8058/admin/keys/{key_id}/permissions" \
   -d '{"can_upload": false, "can_delete": false}'
 ```
 
-### Running the test suite
-
-```bash
-pytest test_ingestion.py test_agent.py test_phase5.py -v
-```
-
 ---
 
 ## 🔐 Access Control & Permissions
+
+<p align="center">
+  <img width="70%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/d5d3b57b-ff7c-4ef7-a350-7448c73c5290" />
+  <br>
+  <sub><i>Administrators can set the permissions to upload and delete the knowledge base and chat for the assigned users.</i></sub>
+</p>
 
 ### Roles
 
@@ -544,6 +616,24 @@ curl -X POST http://localhost:8058/admin/keys \
 ```
 
 > **Security note:** Admin-scoped keys bypass all permission flags and have unrestricted access. Treat them with the same care as the bootstrap key itself.
+
+### Data Isolation
+
+#### Chat sessions
+
+**Chat sessions** are always user-scoped. Each API key owner has an independent conversation history — one user can never read or continue another user's sessions.
+
+#### Knowledge base (documents)
+
+**Knowledge base (documents)** is shared across all users by default: any document uploaded by any user is searchable by everyone. To give each user their own isolated document namespace, set the following in `.env` before starting the stack:
+
+```env
+DATABASE_SHARED=false
+```
+
+With `DATABASE_SHARED=false`, each user's uploaded documents are stored and indexed under their own namespace and are invisible to other users. Admin-scoped keys retain cross-namespace visibility regardless of this setting.
+
+> Changing `DATABASE_SHARED` after documents have already been ingested requires re-indexing existing data. Decide on this setting before the first document upload.
 
 ---
 
@@ -612,7 +702,7 @@ neat_rag/
 │       └── auth.py             # Public redeem-invite endpoint
 ├── test_ingestion.py           # Phase 1 — ingestion pipeline tests
 ├── test_agent.py               # Phase 2 — agent orchestration tests
-└── test_phase5.py              # Phase 5 — advanced retrieval tests
+└── test_orchestrator_flow.py      # Phase 5 — advanced retrieval tests
 ```
 
 ---
