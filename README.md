@@ -26,7 +26,7 @@
 - [Usage](#-usage)
 - [Access Control & Permissions](#-access-control--permissions)
 - [Project Structure](#-project-structure)
-- [Follow-up development plan](#-follow-up-development-plan)
+- [Follow-up development plans](#-follow-up-development-plans)
 - [Contributing](#-contributing)
 - [License & Contact](#-license--contact)
 
@@ -707,7 +707,7 @@ neat_rag/
 
 ---
 
-## 🔮 Follow-up development plan
+## 🔮 Follow-up development plans
 
 - **Frontend Overhaul** — Refactor the existing Streamlit UI into **React** application for improved interactivity, state management, and performance.
 - **Enhanced Feedback Loop** — Currently, user "likes" and "dislikes" are collected and stored. Future updates will leverage this data for:
@@ -718,9 +718,10 @@ neat_rag/
     - **Adaptive RAG**: After each retrieval attempt, a dedicated judge node evaluates result quality. If the retrieved chunks are insufficient, the graph loops back and retries with an alternative strategy (e.g., expanded queries or a different search mode) before proceeding to reranking and generation.
     - **Plan-and-Execute (Multi-step Reasoning)**: For complex questions, a planner node first decomposes the query into sub-questions. Each sub-question is then retrieved and answered independently, and the results are synthesised into a final, coherent response — improving accuracy across multi-document reasoning tasks.
     - **Corrective RAG (CRAG)**: After generating an answer, a verification node checks whether the response is grounded in the retrieved documents. If confidence is low, the graph triggers a fallback (e.g., web search or broader retrieval) before returning the final answer, reducing hallucinations on knowledge-boundary queries.
+- **The markdown output of current models occasionally appears incorrectly rendered**
+- **Hallowed citation markers sometimes appear** — This is mainly depends on the model's ability to follow instructions, will be considered in the future to continue optimizing prompts。
 
 ---
-
 ## 🤝 Contributing
 
 Contributions, bug reports, and feature requests are welcome.
