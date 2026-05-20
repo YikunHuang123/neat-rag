@@ -702,7 +702,7 @@ neat_rag/
 │       └── auth.py             # Public redeem-invite endpoint
 ├── test_ingestion.py           # Phase 1 — ingestion pipeline tests
 ├── test_agent.py               # Phase 2 — agent orchestration tests
-└── test_orchestrator_flow.py      # Phase 5 — advanced retrieval tests
+└── test_orchestrator_flow.py   # Phase 5 — advanced retrieval tests
 ```
 
 ---
