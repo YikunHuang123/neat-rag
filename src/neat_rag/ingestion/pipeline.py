@@ -328,12 +328,17 @@ async def ingest_document(
 async def _worker_startup(ctx: dict) -> None:
     pool = PgPool()
     await pool.connect()
+    pipeline = IngestionPipeline(pg_pool=pool)
+    await pipeline.vector_store.connect()
     ctx["pg_pool"] = pool
-    ctx["pipeline"] = IngestionPipeline(pg_pool=pool)
+    ctx["pipeline"] = pipeline
     logger.info("arq worker started")
 
 
 async def _worker_shutdown(ctx: dict) -> None:
+    pipeline: IngestionPipeline = ctx.get("pipeline")
+    if pipeline:
+        await pipeline.vector_store.disconnect()
     pool: PgPool = ctx.get("pg_pool")
     if pool:
         await pool.disconnect()
