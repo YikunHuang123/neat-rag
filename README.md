@@ -10,6 +10,9 @@
 [![Qdrant](https://img.shields.io/badge/Qdrant-Vector%20DB-0080FF?logo=qdrant&logoColor=white)](https://qdrant.tech/)
 [![LLM Providers](https://img.shields.io/badge/LLM_Providers-Ollama_|_OpenAI_|_Anthropic_|_Google_|_DeepSeek-orange)](#-tech-stack)
 
+<video src="https://github.com/user-attachments/assets/69214298-2aef-4eca-b346-4ef35f4adb87" controls="controls" muted="muted" loop="loop" autoplay="autoplay" width="100%"></video>
+
+> ⭐️ **💖 If you like this project, a star would mean the world to me!**
 
 ---
 
@@ -20,6 +23,7 @@
 - [Tech Stack](#-tech-stack)
 - [Installation](#-installation)
 - [Usage](#-usage)
+- [Access Control & Permissions](#-access-control--permissions)
 - [Project Structure](#-project-structure)
 - [Follow-up development plan](#-follow-up-development-plan)
 - [Contributing](#-contributing)
@@ -44,7 +48,7 @@
 
 ---
 
-## 🎬 Demo & Visuals
+## 🎬 Architecture
 
 ### System Architecture
 
@@ -165,7 +169,7 @@ ADMIN_BOOTSTRAP_KEY=your-very-secret-admin-key
 ```bash
 # Point the app at your local Ollama instance
 LLM_PROVIDER=ollama
-LLM_MODEL=llama3.2          # or any model you have pulled
+LLM_MODEL=qwen2.5:7b          # or any model you have pulled
 LLM_BASE_URL=http://host.docker.internal:11434   # from inside Docker
 # LLM_BASE_URL=http://localhost:11434            # for local dev (Option B)
 
@@ -179,7 +183,7 @@ ADMIN_BOOTSTRAP_KEY=your-very-secret-admin-key
 
 > Make sure Ollama is running and you have pulled the required models:
 > ```bash
-> ollama pull llama3.2
+> ollama pull qwen2.5:7b
 > ollama pull nomic-embed-text
 > ```
 
@@ -264,7 +268,40 @@ streamlit run src/neat_rag/ui.py
 
 ## 💡 Usage
 
+### Workflow Overview
+
+The end-to-end journey from first deployment to a working knowledge base:
+
+```
+1. Deploy the stack
+   └─ docker compose up --build
+      docker compose exec api alembic upgrade head
+
+2. Admin onboards a new user
+   └─ POST /admin/invites  →  { token }  →  shared out-of-band
+
+3. User exchanges token for a personal API key  (one-time use)
+   └─ POST /auth/redeem  →  { api_key: "nrag_..." }
+
+4. User uploads documents
+   └─ POST /documents/upload  →  { job_id, document_id, status: "pending" }
+
+5. Background worker ingests and indexes documents
+   └─ GET /jobs/{job_id}  →  { status: "completed", chunks_created: 42 }
+
+6. User queries the knowledge base
+   ├─ POST /chat         →  { answer, citations }          (blocking)
+   └─ POST /chat/stream  →  SSE delta stream + citations   (real-time)
+```
+
+All API calls require the `X-API-Key` header. The **admin bootstrap key** (set as `ADMIN_BOOTSTRAP_KEY` in `.env`) is active immediately after deployment; all other users must be onboarded through the invite flow described below.
+
+---
+
 ### Uploading a document
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/6f6b8547-a66a-4765-af7c-13d8b265c9b6" />
+</p>
 
 ```bash
 curl -X POST http://localhost:8058/documents/upload \
@@ -281,6 +318,10 @@ curl -X POST http://localhost:8058/documents/upload \
 ```
 
 ### Checking ingestion progress
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/e963542e-12b7-4f74-90b0-b7cfc4d9aa50" />
+</p>
+
 
 ```bash
 curl http://localhost:8058/jobs/3f2a1b... \
@@ -296,7 +337,13 @@ curl http://localhost:8058/jobs/3f2a1b... \
 }
 ```
 
-### Asking a question (blocking)
+### Asking a question (blocking) - Support multi-round dialogue
+
+<p align="center">
+    <img width="60%" alt="image" src="https://github.com/user-attachments/assets/f3bce90b-7042-49a6-810c-75726f0026ae" />
+  <em>Users can conduct multiple rounds of dialogue</em>
+  <em>Click the reference icon to view the original information it quoted.</em>
+</p>
 
 ```bash
 curl -X POST http://localhost:8058/chat \
@@ -318,6 +365,10 @@ curl -X POST http://localhost:8058/chat \
 
 ### Streaming response (SSE)
 
+<p align="center">
+  <em>[图片：聊天界面中 AI 流式逐字输出回答的过程截图，展示回答尚未完成时光标闪烁、文字实时追加的效果]</em>
+</p>
+
 ```bash
 curl -N -X POST http://localhost:8058/chat/stream \
   -H "X-API-Key: admin" \   # Defined as ADMIN_BOOTSTRAP_KEY in .env
@@ -332,21 +383,96 @@ data: {"delta": " a two-stage process..."}
 data: {"done": true, "citations": [...]}
 ```
 
-### Issuing an invite token (admin)
+### Admin Operations
+
+All admin endpoints require the `ADMIN_BOOTSTRAP_KEY` from `.env` (or an API key with `scopes: ["admin"]`).
+
+#### Invite Token Management
+
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/01240b78-8906-41f5-b52c-506838577107" />
+  <br>
+  <sub><i>Administrator generates invitation code</i></sub>
+</p>
+
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/4104b4a3-4c1e-4f53-abad-f7db7894cb69" />
+  <br>
+  <sub><i>The user obtains their API key by redeeming the invite (each token is single-use)</i></sub>
+</p>
+
+<p align="center">
+  <img width="60%" alt="neat_rag_upload" src="https://github.com/user-attachments/assets/0ed38374-fb28-4ce0-bc9d-f48405a3eeeb" />
+  <br>
+  <sub><i>Users enter their API key in the UI to start a conversation</i></sub>
+</p>
 
 ```bash
-# 1. Admin creates a single-use invite
+# Create a single-use invite (7-day expiry by default; range 1–90 days)
 curl -X POST http://localhost:8058/admin/invites \
-  -H "X-API-Key: admin"    # Defined as ADMIN_BOOTSTRAP_KEY in .env
+  -H "X-API-Key: admin"   # Defined as ADMIN_BOOTSTRAP_KEY in .env
 
-# {"token": "inv_abc123...", "expires_at": "2026-06-18T00:00:00Z"}
+# {"id": "...", "token": "inv_abc123...", "used": false, "expires_at": "2026-05-27T..."}
 
-# 2. New user redeems it for their own API key
+# Create an invite for a named user, expiring in 30 days
+curl -X POST http://localhost:8058/admin/invites \
+  -H "X-API-Key: admin" \
+  -H "Content-Type: application/json" \
+  -d '{"owner": "alice", "expires_in_days": 30}'
+
+# List all invite tokens
+curl http://localhost:8058/admin/invites \
+  -H "X-API-Key: admin"
+
+# Revoke an unused invite
+curl -X DELETE "http://localhost:8058/admin/invites/{invite_id}" \
+  -H "X-API-Key: admin"
+```
+
+The user redeems the token once to receive their personal API key:
+
+```bash
 curl -X POST http://localhost:8058/auth/redeem \
   -H "Content-Type: application/json" \
   -d '{"token": "inv_abc123..."}'
 
-# {"api_key": "rak_xyz789...", "created_at": "..."}
+# {"owner": "alice", "raw_key": "nrag_xyz789..."}
+```
+
+> The raw key is shown **exactly once** and is never stored. If a user loses their key, revoke it and issue a new invite.
+
+#### API Key Management
+
+<p align="center">
+  <em>[图片：管理员后台 API Keys 列表页截图，展示所有用户的密钥记录（owner、创建时间、最后使用时间、is_active 状态）]</em>
+</p>
+
+<p align="center">
+  <em>[图片：管理员对某条 API Key 执行权限修改后的界面截图，展示 can_upload / can_delete / can_chat 各开关的当前状态]</em>
+</p>
+
+```bash
+# Create a key directly (bypasses the invite flow)
+curl -X POST http://localhost:8058/admin/keys \
+  -H "X-API-Key: admin" \
+  -H "Content-Type: application/json" \
+  -d '{"owner": "bob", "scopes": []}'
+
+# {"id": "...", "owner": "bob", "scopes": [], "raw_key": "nrag_..."}
+
+# List all keys (optionally filter by owner: ?owner=alice)
+curl http://localhost:8058/admin/keys \
+  -H "X-API-Key: admin"
+
+# Revoke a key permanently
+curl -X DELETE "http://localhost:8058/admin/keys/{key_id}" \
+  -H "X-API-Key: admin"
+
+# Adjust a user's permissions (see Access Control & Permissions section)
+curl -X PATCH "http://localhost:8058/admin/keys/{key_id}/permissions" \
+  -H "X-API-Key: admin" \
+  -H "Content-Type: application/json" \
+  -d '{"can_upload": false, "can_delete": false}'
 ```
 
 ### Running the test suite
@@ -354,6 +480,70 @@ curl -X POST http://localhost:8058/auth/redeem \
 ```bash
 pytest test_ingestion.py test_agent.py test_phase5.py -v
 ```
+
+---
+
+## 🔐 Access Control & Permissions
+
+### Roles
+
+Neat-RAG has three levels of access, checked on every protected request:
+
+| Role | Credential | Capabilities |
+|---|---|---|
+| **Admin** | `ADMIN_BOOTSTRAP_KEY` or API key with `scopes: ["admin"]` | All admin endpoints + all user operations; bypasses all permission flags |
+| **Regular user** | API key issued via invite or direct admin creation | Chat, upload, delete — governed by per-key permission flags |
+| **Unauthenticated** | No `X-API-Key` header | Blocked on all protected endpoints (403) |
+
+### Per-Key Permission Flags
+
+Each regular API key carries four boolean flags, all `true` by default:
+
+| Flag | Protects | Error message when denied |
+|---|---|---|
+| `is_active` | Every endpoint — master on/off switch | `"Account is disabled"` |
+| `can_upload` | `POST /documents/upload` | `"Upload permission denied"` |
+| `can_delete` | `DELETE /documents/{id}` | `"Delete permission denied"` |
+| `can_chat` | `POST /chat` and `POST /chat/stream` | `"Chat permission denied"` |
+
+Admin-scoped keys bypass all four flags entirely.
+
+### Adjusting Permissions
+
+Use `PATCH /admin/keys/{key_id}/permissions` to update any combination of flags in real time — no restart required:
+
+```bash
+# Disable a user (soft ban)
+curl -X PATCH "http://localhost:8058/admin/keys/{key_id}/permissions" \
+  -H "X-API-Key: admin" \
+  -H "Content-Type: application/json" \
+  -d '{"is_active": false}'
+
+# Read-only access: chat allowed, no upload or delete
+curl -X PATCH "http://localhost:8058/admin/keys/{key_id}/permissions" \
+  -H "X-API-Key: admin" \
+  -H "Content-Type: application/json" \
+  -d '{"can_upload": false, "can_delete": false, "can_chat": true}'
+
+# Restore full access
+curl -X PATCH "http://localhost:8058/admin/keys/{key_id}/permissions" \
+  -H "X-API-Key: admin" \
+  -H "Content-Type: application/json" \
+  -d '{"is_active": true, "can_upload": true, "can_delete": true, "can_chat": true}'
+```
+
+### Delegating Admin Access
+
+To give a team member admin privileges without sharing the bootstrap key, create an admin-scoped API key:
+
+```bash
+curl -X POST http://localhost:8058/admin/keys \
+  -H "X-API-Key: admin" \
+  -H "Content-Type: application/json" \
+  -d '{"owner": "ops-team", "scopes": ["admin"]}'
+```
+
+> **Security note:** Admin-scoped keys bypass all permission flags and have unrestricted access. Treat them with the same care as the bootstrap key itself.
 
 ---
 
