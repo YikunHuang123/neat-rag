@@ -615,11 +615,8 @@ curl -X POST http://localhost:8058/admin/keys \
 
 ### Data Isolation
 
-#### Chat sessions
-
 **Chat sessions** are always user-scoped. Each API key owner has an independent conversation history — one user can never read or continue another user's sessions.
 
-#### Knowledge base (documents)
 
 **Knowledge base (documents)** is shared across all users by default: any document uploaded by any user is searchable by everyone. To give each user their own isolated document namespace, set the following in `.env` before starting the stack:
 
