@@ -285,7 +285,7 @@ class QdrantStore(VectorStoreBase):
             collection_name=self._collection,
             query=embedding,
             using=self._vec_name,
-            filter=_build_filter(user_id),
+            query_filter=_build_filter(user_id),
             limit=top_k,
             with_payload=True,
         )
