@@ -76,7 +76,7 @@ for millions of vectors.
 
 # ── new schema matching our code (differs from original schema.sql) ──────────
 # Key differences:
-#   - documents: added mime_type, removed content (we don't store full text)
+#   - documents: added mime_type, chunk_count, user_id; removed content
 #   - chunks: added start_char/end_char, removed chunk_index NOT NULL / token_count
 #   - embedding uses vector (no fixed dim) so tests work for any provider dimension
 TEST_SCHEMA = """
@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS documents (
     source      TEXT NOT NULL,
     mime_type   TEXT NOT NULL DEFAULT 'application/octet-stream',
     metadata    JSONB NOT NULL DEFAULT '{}',
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    user_id     TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -184,7 +186,7 @@ async def apply_schema(pg_pool):
         _fail("Schema setup failed", e)
 
 
-async def test_ingestion(pg_pool, provider: str, chunking_strategy: str, chunker_kwargs: dict):
+async def test_ingestion(pg_pool, vector_store, provider: str, chunking_strategy: str, chunker_kwargs: dict):
     _section(f"Test 3 — Ingestion pipeline  (provider: {provider}, chunking: {chunking_strategy})")
 
     from neat_rag.ingestion.pipeline import IngestionPipeline
@@ -197,9 +199,12 @@ async def test_ingestion(pg_pool, provider: str, chunking_strategy: str, chunker
     except Exception as e:
         _fail(f"Failed to initialize embedder for {provider}", e)
 
+    # Pass the already-connected vector_store so the pipeline doesn't create
+    # its own unconnected instance via get_vector_store().
     pipeline = IngestionPipeline(
         pg_pool=pg_pool,
         embedder=embedder,
+        vector_store=vector_store,
         chunking_strategy=chunking_strategy,
         chunker_kwargs=chunker_kwargs,
     )
@@ -217,44 +222,46 @@ async def test_ingestion(pg_pool, provider: str, chunking_strategy: str, chunker
         _ok(f"Document created  id={document.id}")
         _ok(f"Chunks created    count={document.chunk_count}")
 
-        # Verify in DB
+        # ── Verify via the active vector store interface ──────────────────────
+        # count_by_document() works for both pgvector (queries PG chunks table)
+        # and Qdrant (queries Qdrant collection), so the check is backend-agnostic.
+        vs_count = await vector_store.count_by_document(document.id)
+        _ok(f"Vector store      chunks_stored={vs_count}")
+
+        # ── Verify document metadata row in PG (always written regardless of backend) ──
         async with pg_pool.get_connection() as conn:
-            db_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM chunks WHERE document_id = $1::uuid",
+            pg_chunk_count = await conn.fetchval(
+                "SELECT chunk_count FROM documents WHERE id = $1::uuid",
                 document.id,
             )
+            # The chunks table is only populated by the pgvector backend.
+            # For Qdrant, this query returns no rows — that's expected and correct.
             sample = await conn.fetchrow(
                 "SELECT content, start_char, end_char FROM chunks "
                 "WHERE document_id = $1::uuid ORDER BY start_char LIMIT 1",
                 document.id,
             )
-            has_embedding = await conn.fetchval(
-                "SELECT COUNT(*) FROM chunks "
-                "WHERE document_id = $1::uuid AND embedding IS NOT NULL",
-                document.id,
-            )
 
-        _ok(f"DB verification   chunks_in_db={db_count}, with_embeddings={has_embedding}")
+        _ok(f"PG metadata       chunk_count={pg_chunk_count}")
         if sample:
             snippet = sample["content"][:80].replace("\n", " ")
             _ok(f"First chunk       start={sample['start_char']} end={sample['end_char']}")
             _ok(f"Content preview   \"{snippet}...\"")
 
-        if db_count != document.chunk_count:
-            _fail(f"Chunk count mismatch: pipeline said {document.chunk_count}, DB has {db_count}")
-        if has_embedding < db_count:
-            _fail(f"Only {has_embedding}/{db_count} chunks have embeddings — embedding failed?")
+        if vs_count != document.chunk_count:
+            _fail(f"Chunk count mismatch: pipeline said {document.chunk_count}, vector store has {vs_count}")
 
     except Exception as e:
         _fail("Ingestion failed", e)
     finally:
         tmp_path.unlink(missing_ok=True)
-        # Clean up test data from DB
+        # Clean up test data: vector store first, then PG.
+        # Deleting PG row first would leave orphan vectors in Qdrant.
         if document:
             try:
+                await vector_store.delete_by_document(document.id)
                 async with pg_pool.get_connection() as conn:
                     await conn.execute("DELETE FROM documents WHERE id = $1::uuid", document.id)
-                    # pass
                 _ok(f"Cleanup done      (document {document.id} removed)")
             except Exception:
                 pass  # cleanup failure is not a test failure
@@ -266,6 +273,7 @@ async def main():
     # Because our app uses pydantic-settings, it automatically loads .env
     # upon importing neat_rag.config. We don't need a custom _load_dotenv anymore.
     from neat_rag.config import settings
+    from neat_rag.db.vector_store import get_vector_store
 
     parser = argparse.ArgumentParser(description="Neat-RAG Phase 1 ingestion test")
     parser.add_argument(
@@ -280,36 +288,47 @@ async def main():
     print(f"  Neat-RAG — Phase 1 Ingestion Test")
     print(f"  Provider: {args.provider}")
     print(f"  Model:    {settings.EMBEDDING_MODEL}")
+    print(f"  Backend:  {settings.VECTOR_STORE_BACKEND}")
     print(f"{'='*50}")
 
     pg_pool = await test_db_connection()
     await apply_schema(pg_pool)
-    
-    # Run test 1: Recursive Chunking
-    await test_ingestion(
-        pg_pool, 
-        args.provider, 
-        "recursive", 
-        {"chunk_size": 500, "chunk_overlap": 50}
-    )
-    
-    # Run test 2: Semantic Chunking
-    await test_ingestion(
-        pg_pool, 
-        args.provider, 
-        "semantic", 
-        {"breakpoint_threshold_type": "percentile", "min_chunk_size": 50}
-    )
 
-    # Run test 3: Token Chunking
-    await test_ingestion(
-        pg_pool, 
-        args.provider, 
-        "token", 
-        {"max_tokens": 100, "overlap_tokens": 15}
-    )
+    # Connect the vector store once here and reuse it across all test runs.
+    # This mirrors the FastAPI lifespan pattern in api/__init__.py.
+    vector_store = get_vector_store()
+    await vector_store.connect()
 
-    await pg_pool.disconnect()
+    try:
+        # Run test 1: Recursive Chunking
+        await test_ingestion(
+            pg_pool,
+            vector_store,
+            args.provider,
+            "recursive",
+            {"chunk_size": 500, "chunk_overlap": 50}
+        )
+
+        # Run test 2: Semantic Chunking
+        await test_ingestion(
+            pg_pool,
+            vector_store,
+            args.provider,
+            "semantic",
+            {"breakpoint_threshold_type": "percentile", "min_chunk_size": 50}
+        )
+
+        # Run test 3: Token Chunking
+        await test_ingestion(
+            pg_pool,
+            vector_store,
+            args.provider,
+            "token",
+            {"max_tokens": 100, "overlap_tokens": 15}
+        )
+    finally:
+        await vector_store.disconnect()
+        await pg_pool.disconnect()
 
     print(f"\n{'='*50}")
     print(f"  \033[32mAll tests passed!\033[0m")
