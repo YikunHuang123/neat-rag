@@ -132,7 +132,7 @@ _IMAGE_MEDIA_TYPES: dict[str, str] = {
 }
 
 
-async def _load_relevant_images(question: str, user_id: str | None, top_k: int = 3) -> list:
+async def load_relevant_images(question: str, user_id: str | None, top_k: int = 3) -> list:
     """
     Pre-retrieve image chunks relevant to *question* and return their binary
     content wrapped in pydantic-ai BinaryContent objects.
@@ -220,7 +220,7 @@ async def run_query(
     # normal search tool, so this path is skipped for them.
     user_content: Any = question
     if settings.LLM_MULTIMODAL:
-        image_parts = await _load_relevant_images(original_question, user_id)
+        image_parts = await load_relevant_images(original_question, user_id)
         if image_parts:
             user_content = [question] + image_parts
             logger.info("Multimodal: images attached to query", count=len(image_parts))

@@ -8,7 +8,13 @@ from fastapi.responses import StreamingResponse
 from pydantic_ai import Agent
 
 from neat_rag.agent.memory import load_history
-from neat_rag.agent.orchestrator import build_agent_context, get_agent, run_query, inject_language_directive
+from neat_rag.agent.orchestrator import (
+    build_agent_context,
+    get_agent,
+    run_query,
+    inject_language_directive,
+    load_relevant_images,
+)
 from neat_rag.agent.prompts import build_system_prompt
 from neat_rag.agent.title import generate_session_title
 from neat_rag.agent.tools import AGENT_TOOLS, AgentContext
@@ -154,7 +160,20 @@ async def chat_stream(
         else:
             agent = _default_agent
 
+        # Sanitize and prepare the prompt, matching run_query behavior
+        sanitized_message = body.message.encode("utf-8", "ignore").decode("utf-8")
+        query_message = inject_language_directive(sanitized_message)
+
         ctx = build_agent_context(body.session_id, user_id=doc_scope(owner), search_type=body.search_type)
+
+        # Handle multimodal input if enabled
+        user_content: Any = query_message
+        if settings.LLM_MULTIMODAL:
+            image_parts = await load_relevant_images(sanitized_message, doc_scope(owner))
+            if image_parts:
+                user_content = [query_message] + image_parts
+                logger.info("Multimodal (stream): images attached", count=len(image_parts))
+
         # Determine the effective provider to decide whether streaming is supported.
         effective_provider = (body.llm_provider or settings.LLM_PROVIDER).lower()
 
@@ -164,7 +183,7 @@ async def chat_stream(
             # incompatible with pydantic-ai's stream reconstruction logic.
             if effective_provider in ["deepseek", "ollama"]:
                 result = await agent.run(
-                    inject_language_directive(body.message),
+                    user_content,
                     deps=ctx,
                     message_history=history,
                 )
@@ -178,7 +197,7 @@ async def chat_stream(
                     await asyncio.sleep(0.01)
             else:
                 async with agent.run_stream(
-                    body.message,
+                    user_content,
                     deps=ctx,
                     message_history=history,
                 ) as result:
@@ -200,7 +219,7 @@ async def chat_stream(
         # Persist both sides of the exchange using a fresh connection.
         async with pg_pool.get_connection() as persist_conn:
             repo = SessionRepository(persist_conn)
-            await repo.add_message(body.session_id, MessageRole.USER, body.message)
+            await repo.add_message(body.session_id, MessageRole.USER, sanitized_message)
             msg = await repo.add_message(body.session_id, MessageRole.AGENT, full_answer)
 
         # Prepare citations for the frontend
