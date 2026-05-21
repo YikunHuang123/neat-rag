@@ -702,6 +702,8 @@ neat_rag/
 
 ## 🔮 Follow-up development plans
 
+- **Improve the algorithm for segmenting chunks.** - Current code uses RecursiveChunker by default. Semantic Chunking consumes extremely high latency when it consumes high concurrency, and consumes a lot of API when it consumes long contexts.
+  - Consider improving the algorithm to Token-Budget Recursive Splitting. Or the more advanced Layout Aware algorithm (Need to consider whether the processing time of this algorithm is too long)
 - **Frontend Overhaul** — Refactor the existing Streamlit UI into **React** application for improved interactivity, state management, and performance.
 - **Enhanced Feedback Loop** — Currently, user "likes" and "dislikes" are collected and stored. Future updates will leverage this data for:
     - **Offline Quality Assessment**: Systematic analysis of user feedback to identify and fix failure modes in the RAG pipeline.
