@@ -133,3 +133,5 @@ documents/*.html
 # Custom ignores
 .idea/
 test_files/
+
+data/
