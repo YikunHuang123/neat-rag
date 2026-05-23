@@ -747,6 +747,7 @@ neat_rag/
 
 ## 🔮 Follow-up development plans
 
+- **(Bug) search_by_schema_field will not be called at most time.**
 - **Distinguish between text and picture attributes in the database** - At present, there is no distinction between text and picture attributes in the database, resulting in the need to search the entire database (including text) during the picture pre-injection stage.
 - **Consider introducing ColPali to store picture vectors** - At present, the vectors of the picture ocr and description text are stored in the database. Consider using ColPali to directly compress pictures into vectors. Speed up the search results and accuracy of pictures
 - **Improve the algorithm for segmenting chunks.** - Current code uses RecursiveChunker by default. Semantic Chunking consumes extremely high latency when it consumes high concurrency, and consumes a lot of API when it consumes long contexts.
@@ -761,7 +762,8 @@ neat_rag/
     - **Plan-and-Execute (Multi-step Reasoning)**: For complex questions, a planner node first decomposes the query into sub-questions. Each sub-question is then retrieved and answered independently, and the results are synthesised into a final, coherent response — improving accuracy across multi-document reasoning tasks.
     - **Corrective RAG (CRAG)**: After generating an answer, a verification node checks whether the response is grounded in the retrieved documents. If confidence is low, the graph triggers a fallback (e.g., web search or broader retrieval) before returning the final answer, reducing hallucinations on knowledge-boundary queries.
 - **The markdown output of current models occasionally appears incorrectly rendered**
-- **Hallowed citation markers sometimes appear** — This is mainly depends on the model's ability to follow instructions, will be considered in the future to continue optimizing prompts。
+- **Hallucinated citation markers sometimes appear** — used rules to fix the hallucinated citations in standard block output. But it's hard to fix them in streaming output because it depends on how well the model follows instructions. Will consider adjusting the prompts, or filtering the text again after it is fully generated.
+
 
 ---
 ## 🤝 Contributing

@@ -121,7 +121,7 @@ def inject_language_directive(question: str) -> str:
     return (
         "## MANDATORY PROTOCOL\n"
         "1. LANGUAGE: Respond in the same language as this question.\n"
-        "2. SEARCH FIRST: You MUST call a search tool (like hybrid_search) for ANY factual query. "
+        "2. SEARCH FIRST: You MUST call an appropriate search tool (hybrid_search, vector_search, or search_by_schema_field) for ANY factual query. "
         "Do not answer from memory. If you don't search, you are failing your task.\n"
         "3. CITATIONS: Use [n] markers inline for every fact if you found documents.\n"
         "------------------\n"
