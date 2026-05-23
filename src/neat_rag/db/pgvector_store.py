@@ -170,14 +170,18 @@ class PgVectorStore(VectorStoreBase):
         embedding: List[float],
         top_k: int,
         user_id: Optional[str],
+        document_ids: Optional[List[str]] = None,
     ) -> List[SearchHit]:
         vec = _vec_str(embedding)
+        # Pass None when empty so the SQL function treats it as "no filter".
+        doc_ids = document_ids or None
         async with self._pg_pool.get_connection() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM match_chunks($1::vector, $2, $3)",
+                "SELECT * FROM match_chunks($1::vector, $2, $3, $4)",
                 vec,
                 top_k,
                 user_id,
+                doc_ids,
             )
         return _parse_vector_rows(rows)
 
@@ -188,15 +192,18 @@ class PgVectorStore(VectorStoreBase):
         top_k: int,
         user_id: Optional[str],
         text_weight: float = 0.3,
+        document_ids: Optional[List[str]] = None,
     ) -> List[SearchHit]:
         vec = _vec_str(embedding)
+        doc_ids = document_ids or None
         async with self._pg_pool.get_connection() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM hybrid_search($1::vector, $2::text, $3, $4, $5)",
+                "SELECT * FROM hybrid_search($1::vector, $2::text, $3, $4, $5, $6)",
                 vec,
                 query,
                 top_k,
                 text_weight,
                 user_id,
+                doc_ids,
             )
         return _parse_hybrid_rows(rows)

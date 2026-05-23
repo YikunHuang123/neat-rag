@@ -145,3 +145,12 @@ class Citation(BaseModel):
     document_title: str
     document_source: str
     content_snippet: str
+
+class DocumentStructuredData(BaseModel):
+    """Structured metadata extracted from a document by the schema extraction agent."""
+    title: str
+    summary: str
+    document_type: str
+    entities: List[str] = Field(default_factory=list)
+    key_topics: List[str] = Field(default_factory=list)
+    key_dates: List[str] = Field(default_factory=list)

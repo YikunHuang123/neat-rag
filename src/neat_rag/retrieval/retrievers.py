@@ -20,12 +20,16 @@ class VectorRetriever:
         self._store = vector_store
 
     async def search(
-        self, query: str, top_k: int = 10, user_id: str | None = None
+        self,
+        query: str,
+        top_k: int = 10,
+        user_id: str | None = None,
+        document_ids: list[str] | None = None,
     ) -> SearchResult:
         t0 = time.monotonic()
         try:
             embedding = await self._embedder.embed_one(query)
-            hits = await self._store.vector_search(embedding, top_k, user_id)
+            hits = await self._store.vector_search(embedding, top_k, user_id, document_ids)
             elapsed = (time.monotonic() - t0) * 1000
             logger.info("Vector search done", query=query[:60], hits=len(hits), ms=round(elapsed, 1))
             return SearchResult(
@@ -62,11 +66,14 @@ class HybridRetriever:
         top_k: int = 10,
         text_weight: float = 0.3,
         user_id: str | None = None,
+        document_ids: list[str] | None = None,
     ) -> SearchResult:
         t0 = time.monotonic()
         try:
             embedding = await self._embedder.embed_one(query)
-            hits = await self._store.hybrid_search(embedding, query, top_k, user_id, text_weight)
+            hits = await self._store.hybrid_search(
+                embedding, query, top_k, user_id, text_weight, document_ids
+            )
             elapsed = (time.monotonic() - t0) * 1000
             logger.info("Hybrid search done", query=query[:60], hits=len(hits), ms=round(elapsed, 1))
             return SearchResult(

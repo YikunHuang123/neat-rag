@@ -16,6 +16,7 @@ from neat_rag.models import Document, Chunk, JobStatus
 from neat_rag.providers.embedding import OpenAIEmbedder, get_embedder
 from neat_rag.ingestion.extractors import dispatch_by_ext
 from neat_rag.ingestion.chunkers import get_chunker, RawChunk
+from neat_rag.ingestion.schema_extractor import extract_document_schema, to_xml
 from neat_rag.exceptions import IngestionError
 from neat_rag.logger import get_logger
 
@@ -100,8 +101,24 @@ class IngestionPipeline:
                 raise IngestionError(f"Extraction produced empty content for '{file_path.name}'")
             logger.info("Extraction done", file=file_path.name, content_len=len(content))
 
+            # ── Step 1.5: Schema Extraction (optional) ───────────────
+            # Skipped for image documents — their content is already
+            # structured (VLM description + OCR) and too short to be
+            # useful for LLM-based metadata extraction.
+            if settings.ENABLE_SCHEMA_EXTRACTION and not metadata.get("is_image"):
+                await _update_job(self.pg_pool, job_id, 0.2, JobStatus.PROCESSING)
+                schema_data = await extract_document_schema(content)
+                if schema_data:
+                    metadata["structured_schema"] = schema_data.model_dump()
+                    metadata["structured_schema_xml"] = to_xml(schema_data)
+                    logger.info(
+                        "Schema extraction done",
+                        file=file_path.name,
+                        doc_type=schema_data.document_type,
+                    )
+
             # ── Step 2: Chunk ────────────────────────────────────────
-            await _update_job(self.pg_pool, job_id, 0.3, JobStatus.PROCESSING)
+            await _update_job(self.pg_pool, job_id, 0.35, JobStatus.PROCESSING)
 
             if metadata.get("is_image"):
                 # Images skip the generic chunker — we build exactly two
@@ -125,12 +142,12 @@ class IngestionPipeline:
             logger.info("Chunking done", file=file_path.name, chunks=len(raw_chunks))
 
             # ── Step 3: Embed ────────────────────────────────────────
-            await _update_job(self.pg_pool, job_id, 0.5, JobStatus.PROCESSING)
+            await _update_job(self.pg_pool, job_id, 0.55, JobStatus.PROCESSING)
             vectors = await self.embedder.embed([c.content for c in raw_chunks])
             logger.info("Embedding done", file=file_path.name, vectors=len(vectors))
 
             # ── Step 4: Assemble domain models ───────────────────────
-            await _update_job(self.pg_pool, job_id, 0.8, JobStatus.PROCESSING)
+            await _update_job(self.pg_pool, job_id, 0.85, JobStatus.PROCESSING)
             now = datetime.now(timezone.utc)
             display_name = original_name or file_path.name
             document = Document(

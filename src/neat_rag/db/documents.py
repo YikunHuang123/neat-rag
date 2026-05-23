@@ -261,6 +261,40 @@ class DocumentRepository:
             logger.error("Failed to delete document", document_id=document_id, error=str(e))
             raise DatabaseError(f"Failed to delete document: {e}")
 
+    async def get_document_schemas_batch(
+        self, document_ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Return the structured_schema sub-object for a batch of documents.
+
+        Executes a single query for all IDs so callers (e.g. the context
+        augmentation path in the search tools) pay one round-trip regardless
+        of how many documents are in a result set.
+
+        Returns a dict mapping document_id → structured_schema dict.
+        Documents without a structured_schema entry are omitted from the result.
+        """
+        if not document_ids:
+            return {}
+        try:
+            rows = await self.conn.fetch(
+                """
+                SELECT id::text, metadata->'structured_schema' AS schema
+                FROM documents
+                WHERE id = ANY($1::uuid[])
+                  AND metadata ? 'structured_schema'
+                """,
+                document_ids,
+            )
+            return {
+                row["id"]: json.loads(row["schema"]) if isinstance(row["schema"], str) else row["schema"]
+                for row in rows
+                if row["schema"] is not None
+            }
+        except Exception as e:
+            logger.error("Failed to fetch document schemas", error=str(e))
+            return {}
+
     async def update_metadata(self, document_id: str, new_metadata: Dict[str, Any]):
         """Updates (merges) the metadata of a document."""
         try:

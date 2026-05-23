@@ -11,6 +11,7 @@ from neat_rag.api.middleware import doc_scope, verify_api_key, require_upload_pe
 from neat_rag.api.schemas import (
     DocumentListResponse,
     DocumentResponse,
+    DocumentSchemaResponse,
     JobListResponse,
     JobResponse,
     UpdateDocumentRequest,
@@ -116,6 +117,29 @@ async def get_document(
     if doc is None:
         raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
     return _to_doc_response(doc)
+
+
+@router.get("/documents/{document_id}/schema", response_model=DocumentSchemaResponse)
+async def get_document_schema(
+    document_id: str,
+    conn: asyncpg.Connection = Depends(get_connection),
+    owner: Optional[str] = Depends(verify_api_key),
+):
+    doc_repo = DocumentRepository(conn)
+    doc = await doc_repo.get_document(document_id, user_id=doc_scope(owner))
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
+    schema = doc.metadata.get("structured_schema")
+    if schema is None:
+        raise HTTPException(status_code=404, detail="No schema available for this document.")
+    return DocumentSchemaResponse(
+        document_id=document_id,
+        document_type=schema.get("document_type"),
+        summary=schema.get("summary"),
+        entities=schema.get("entities", []),
+        key_topics=schema.get("key_topics", []),
+        key_dates=schema.get("key_dates", []),
+    )
 
 
 @router.delete("/documents/{document_id}", status_code=204)

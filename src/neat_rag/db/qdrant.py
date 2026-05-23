@@ -26,6 +26,7 @@ from qdrant_client.models import (
     FilterSelector,
     Fusion,
     FusionQuery,
+    MatchAny,
     MatchValue,
     NamedSparseVector,
     PointStruct,
@@ -280,12 +281,13 @@ class QdrantStore(VectorStoreBase):
         embedding: List[float],
         top_k: int,
         user_id: Optional[str],
+        document_ids: Optional[List[str]] = None,
     ) -> List[SearchHit]:
         results = await self._client_safe.query_points(
             collection_name=self._collection,
             query=embedding,
             using=self._vec_name,
-            query_filter=_build_filter(user_id),
+            query_filter=_build_filter(user_id, document_ids),
             limit=top_k,
             with_payload=True,
         )
@@ -298,8 +300,9 @@ class QdrantStore(VectorStoreBase):
         top_k: int,
         user_id: Optional[str],
         text_weight: float = 0.3,  # kept for interface compatibility; RRF auto-weights
+        document_ids: Optional[List[str]] = None,
     ) -> List[SearchHit]:
-        user_filter = _build_filter(user_id)
+        query_filter = _build_filter(user_id, document_ids)
         prefetch_limit = top_k * 3
         results = await self._client_safe.query_points(
             collection_name=self._collection,
@@ -308,13 +311,13 @@ class QdrantStore(VectorStoreBase):
                     query=embedding,  # Pass raw list[float] since 'using' is specified
                     using=self._vec_name,
                     limit=prefetch_limit,
-                    filter=user_filter,
+                    filter=query_filter,
                 ),
                 Prefetch(
                     query=_sparse_embed(query),  # Pass raw SparseVector since 'using' is specified
                     using=_SPARSE_SLOT,
                     limit=prefetch_limit,
-                    filter=user_filter,
+                    filter=query_filter,
                 ),
             ],
             query=FusionQuery(fusion=Fusion.RRF),
@@ -326,10 +329,16 @@ class QdrantStore(VectorStoreBase):
 
 # ── Private helpers ───────────────────────────────────────────────────────────
 
-def _build_filter(user_id: Optional[str]) -> Optional[Filter]:
-    if user_id is None:
-        return None
-    return Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))])
+def _build_filter(
+    user_id: Optional[str],
+    document_ids: Optional[List[str]] = None,
+) -> Optional[Filter]:
+    must = []
+    if user_id is not None:
+        must.append(FieldCondition(key="user_id", match=MatchValue(value=user_id)))
+    if document_ids:
+        must.append(FieldCondition(key="document_id", match=MatchAny(any=document_ids)))
+    return Filter(must=must) if must else None
 
 
 def _point_to_chunk(point) -> Chunk:

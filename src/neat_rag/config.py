@@ -180,6 +180,25 @@ class Settings(BaseSettings):
     RATE_LIMIT_DEFAULT: str = "60/minute"
     RATE_LIMIT_CHAT: str = "10/minute"
 
+    # --- Schema Extraction ---
+    # When True, the ingestion pipeline runs a Pydantic AI agent after text extraction
+    # to pull structured metadata (title, summary, document_type, entities, dates) from
+    # the raw content and store it in documents.metadata["structured_schema"].
+    ENABLE_SCHEMA_EXTRACTION: bool = True
+
+    # Maximum characters of document content sent to the schema extraction LLM.
+    # Keeps token costs bounded for large documents.
+    SCHEMA_EXTRACTION_MAX_CHARS: int = 3000
+
+    # Allowed document_type values injected into the extraction agent's system prompt.
+    # Extend this list in .env as: SCHEMA_DOCUMENT_TYPES=["report","contract","memo"]
+    SCHEMA_DOCUMENT_TYPES: list[str] = ["report", "contract", "invoice", "paper", "email", "other"]
+
+    # When True, search tools inject each retrieved document's structured_schema as
+    # background context alongside the chunk content, helping the LLM reason over
+    # document-level metadata (e.g., signing dates, parties) without extra tool calls.
+    ENABLE_CONTEXT_AUGMENTATION: bool = True
+
     # --- Ingestion Limits ---
     # Hard wall-clock limit for a single file extraction (seconds).
     # asyncio.wait_for raises TimeoutError → job is marked FAILED instead of hanging forever.

@@ -67,6 +67,15 @@ class UpdateDocumentRequest(BaseModel):
     metadata: Dict[str, Any]
 
 
+class DocumentSchemaResponse(BaseModel):
+    document_id: str
+    document_type: Optional[str] = None
+    summary: Optional[str] = None
+    entities: List[str] = Field(default_factory=list)
+    key_topics: List[str] = Field(default_factory=list)
+    key_dates: List[str] = Field(default_factory=list)
+
+
 # --- Jobs ---
 
 class JobResponse(BaseModel):

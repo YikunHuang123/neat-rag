@@ -34,18 +34,19 @@
 
 ## ✨ Features
 
-| Feature | Description                                                                                            |
-|---|--------------------------------------------------------------------------------------------------------|
-| 📄 Multi-Format Ingestion | Uploads and indexes PDF, DOCX, Markdown, HTML, TXT, and Images files.                                  |
-| 🔌 Flexible LLM Support | Works with any major cloud provider (OpenAI, Gemini, Anthropic, DeepSeek) or fully offline via Ollama. |
-| 🔀 Hybrid Search | Finds relevant content by combining semantic vector search with keyword-based full-text search.        |
-| 🎯 Smart Retrieval | Improves answer quality through query rewriting, multi-query decomposition, and neural reranking.      |
-| 🔗 Inline Citations | Backs every answer with numbered `[1][2]` source references linked to the exact document passage.      |
-| 🧠 Conversation Memory | Keeps track of chat history within a session for natural, multi-turn dialogue.                         |
-| ⚡ Streaming Chat | Streams answers token-by-token for a responsive, real-time chat experience.                            |
-| 🔑 User & Access Management | Controls who can access the system through an admin-managed API key and invite system.                 |
-| 📊 Quality Evaluation | Measures answer quality with built-in RAGAS metrics (Faithfulness, Relevancy, Precision).              |
-| 🖥️ Web UI | Provides a Streamlit interface for chatting, managing documents, and monitoring ingestion jobs.        |
+| Feature | Description                                                                                                                                                                        |
+|---|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 📄 Multi-Format Ingestion | Uploads and indexes PDF, DOCX, Markdown, HTML, TXT, and Images files.                                                                                                              |
+| 🔌 Flexible LLM Support | Works with any major cloud provider (OpenAI, Gemini, Anthropic, DeepSeek) or fully offline via Ollama.                                                                             |
+| 🔀 Hybrid Search | Finds relevant content by combining semantic vector search with keyword-based full-text search.                                                                                    |
+| 🎯 Smart Retrieval | Improves answer quality through query rewriting, multi-query decomposition, and neural reranking.                                                                                  |
+| 🔗 Inline Citations | Backs every answer with numbered `[1][2]` source references linked to the exact document passage.                                                                                  |
+| 🧠 Conversation Memory | Keeps track of chat history within a session for natural, multi-turn dialogue.                                                                                                     |
+| ⚡ Streaming Chat | Streams answers token-by-token for a responsive, real-time chat experience.                                                                                                        |
+| 🔑 User & Access Management | Controls who can access the system through an admin-managed API key and invite system.                                                                                             |
+| 📊 Quality Evaluation | Measures answer quality with built-in RAGAS metrics (Faithfulness, Relevancy, Precision).                                                                                          |
+| 🖥️ Web UI | Provides a Streamlit interface for chatting, managing documents, and monitoring ingestion jobs.                                                                                    |
+| 🧩 Document Schema Extraction | Runs a Pydantic AI agent at ingestion time to extract structured metadata (document type, summary, entities, key topics, key dates) from each document and store it as JSONB.      |
 
 ---
 
@@ -140,6 +141,20 @@ When a file is uploaded, the API creates a job record and pushes it to a **Redis
   
   The original image file is also copied to persistent storage — required so the LLM can receive it at query time.
 
+**1.5. Schema Extraction (optional)** — when `ENABLE_SCHEMA_EXTRACTION=true` in `.env`, a lightweight **Pydantic AI agent** runs immediately after extraction and before chunking. It reads up to `SCHEMA_EXTRACTION_MAX_CHARS` characters of the raw text and produces a `DocumentStructuredData` object validated against a strict JSON schema:
+
+| Field | Description |
+|---|---|
+| `document_type` | Category label drawn from the configurable `SCHEMA_DOCUMENT_TYPES` list (e.g. `contract`, `invoice`, `report`, `paper`, `email`, `other`) |
+| `summary` | One-paragraph human-readable summary of the document |
+| `entities` | Named entities — persons, organisations, locations |
+| `key_topics` | Main subject areas covered |
+| `key_dates` | Significant dates mentioned (e.g. effective dates, deadlines) |
+
+The agent uses Pydantic AI's `result_type` mechanism to enforce the schema: if the LLM output does not conform, the framework automatically retries. On success the result is serialised to both **JSON** (stored in `documents.metadata["structured_schema"]`) and **XML** (stored in `documents.metadata["structured_schema_xml"]`), making it available to SQL/JSONB queries and agent tools alike.
+
+Schema extraction is skipped for image documents and fails silently — a failure logs a warning and leaves the document without schema data rather than aborting the entire ingestion job.
+
 **2. Chunk** — text documents are split by `RecursiveCharacterTextSplitter` (fixed overlap) or a semantic chunker. Images bypass the generic chunker entirely and always produce exactly **two targeted chunks**:
 
 | Chunk type | Content | Best for |
@@ -152,6 +167,8 @@ Both chunks carry an `image_path` pointer to the stored original. Either may be 
 **3. Embed** — all chunks are sent to the configured embedding provider (OpenAI / Gemini / Ollama) in a batch.
 
 **4. Store** — document metadata is committed to PostgreSQL first; then chunk vectors are written to the active vector store (pgvector or Qdrant). This order is intentional: a failed vector upsert leaves detectable orphan metadata (recoverable by re-indexing) rather than silent orphan vectors.
+
+The extracted schema (if any) is stored within the document's `metadata` JSONB column — no extra table required. Use `GET /documents/{id}/schema` to retrieve it via the API.
 
 The job status (`pending → processing → completed / failed`) and progress percentage are updated in real time so the UI can poll `GET /jobs/{job_id}`.
 
@@ -185,6 +202,32 @@ The top-*k* merged candidates are passed to a **cross-encoder reranker** (BGE Cr
 The core of the system is a **Pydantic AI agent** configured with a set of tools (retrieval, summarisation, direct answer, etc.). Given a user question, the agent decides at runtime which tools to call and in what order, rather than following a fixed retrieval-then-generate pipeline. This lets it handle multi-step questions, refuse out-of-scope queries, or fall back to a general answer when retrieval confidence is low.
 
 After the LLM generates a response, a post-processing step scans the text for `[1]`, `[2]` markers, matches each back to the exact chunk that was retrieved, and returns a structured `citations` array alongside the answer — so every claim is traceable to its source passage.
+
+### Schema-Aware Retrieval Tools
+
+The agent is equipped with two complementary search tools that together enable precise, scoped retrieval:
+
+| Tool | Purpose |
+|---|---|
+| `search_by_schema_field` | Metadata-only filter — matches documents by `document_type`, named `entity`, or `topic` without touching chunk content. Returns document IDs and summaries. |
+| `hybrid_search` / `vector_search` | Content search — accepts an optional `document_ids` list to restrict the search scope to a specific subset of documents. |
+
+A typical two-step flow for a targeted question (e.g. *"What does the Acme Corp contract say about termination?"*):
+1. The agent calls `search_by_schema_field(entity="Acme Corp", document_type="contract")` → receives matching document IDs.
+2. It then calls `hybrid_search(query="termination clause", document_ids=[...])` → searches only within those documents.
+
+The `document_ids` filter is threaded end-to-end through the retriever, the abstract `VectorStoreBase` interface, and each backend (pgvector SQL function / Qdrant payload filter), so no extra query hop is needed.
+
+### Context Augmentation
+
+When `ENABLE_CONTEXT_AUGMENTATION=true` (default), after retrieval the system batch-fetches the `structured_schema` for every unique document in the result set (one SQL query regardless of result count) and prepends a concise metadata preamble to the LLM context:
+
+```
+[Document Metadata Context — use to support reasoning, do not cite directly]
+  "Q4 Financial Report": type=report, key_dates=['2025-12-31'], entities=['CFO Jane Smith'], summary=…
+```
+
+This lets the LLM reason over document-wide facts — publication dates, parties, document category — without needing to call extra tools, which reduces latency and token usage on multi-document questions.
 
 ---
 
@@ -644,10 +687,11 @@ neat_rag/
 │       ├── 002_add_user_id.py
 │       ├── 003_invite_tokens.py
 │       ├── 004_migrate_to_qdrant.py
-│       └── 005_add_user_permissions.py
+│       ├── 005_add_user_permissions.py
+│       └── 006_schema_extraction.py      
 ├── src/neat_rag/
 │   ├── config.py               # Pydantic Settings — all env vars with defaults
-│   ├── models.py               # Domain models: Document, Chunk, Session, Message, Job…
+│   ├── models.py               # Domain models: Document, Chunk, Session, Message, Job, DocumentStructuredData…
 │   ├── exceptions.py           # Custom exception hierarchy
 │   ├── eval.py                 # RAGAS evaluation helpers
 │   ├── ui.py                   # Streamlit frontend
@@ -658,7 +702,8 @@ neat_rag/
 │   ├── ingestion/
 │   │   ├── extractors.py       # PDF / DOCX / HTML / image text extraction
 │   │   ├── chunkers.py         # Recursive and semantic chunking strategies
-│   │   └── pipeline.py         # Extract → chunk → embed → store orchestration
+│   │   ├── schema_extractor.py # Pydantic AI agent for structured schema extraction (Step 1.5)
+│   │   └── pipeline.py         # Extract → schema → chunk → embed → store orchestration
 │   ├── retrieval/
 │   │   ├── retrievers.py       # VectorRetriever and HybridRetriever
 │   │   ├── rerank.py           # Post-retrieval reranking
@@ -666,7 +711,7 @@ neat_rag/
 │   │   └── citation.py         # Inline citation extraction
 │   ├── agent/
 │   │   ├── orchestrator.py     # run_query() — main public entry point
-│   │   ├── tools.py            # Agent tools + AgentContext (dependency injection)
+│   │   ├── tools.py            # Agent tools: hybrid_search, vector_search, search_by_schema_field, get_document, list_documents
 │   │   ├── memory.py           # Conversation history management
 │   │   ├── prompts.py          # System prompt templates
 │   │   └── title.py            # Auto-generated session titles

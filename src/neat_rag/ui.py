@@ -143,6 +143,11 @@ header { background-color: transparent !important; }
     display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 0.67rem; font-weight: 700;
     background: rgba(124,58,237,.12); color: #8b5cf6; border: 1px solid rgba(124,58,237,.2);
 }
+.nr-type-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 0.67rem; font-weight: 700;
+    background: rgba(16,185,129,.12); color: #10b981; border: 1px solid rgba(16,185,129,.2);
+    margin-left: 6px;
+}
 
 /* ── Job row ── */
 .nr-job {
@@ -1187,16 +1192,45 @@ elif st.session_state.nav == "documents":
             if not docs:
                 st.info("No documents yet — use the Upload tab to add some.")
             else:
+                # ── Type filter (only shown when at least one doc has schema data) ──
+                has_schemas = any(
+                    d.get("metadata", {}).get("structured_schema") for d in docs
+                )
+                type_filter = ""
+                if has_schemas:
+                    type_filter = st.text_input(
+                        "Filter by document type",
+                        placeholder="Filter by document type (e.g. contract, report, invoice)…",
+                        label_visibility="collapsed",
+                    )
+                if type_filter.strip():
+                    tf = type_filter.strip().lower()
+                    docs = [
+                        d for d in docs
+                        if tf in (
+                            d.get("metadata", {})
+                            .get("structured_schema", {})
+                            .get("document_type", "") or ""
+                        ).lower()
+                    ]
+                    st.caption(f"{len(docs)} result(s) for type '{type_filter.strip()}'")
+
                 for doc in docs:
+                    schema = doc.get("metadata", {}).get("structured_schema") or {}
                     icon = _MIME_ICON.get(doc.get("mime_type", ""), "📁")
                     created = doc.get("created_at", "")[:10]
+                    doc_type = schema.get("document_type", "")
+                    type_badge = (
+                        f'<span class="nr-type-badge">{_html.escape(doc_type)}</span>'
+                        if doc_type else ""
+                    )
                     dcol, bcol = st.columns([5, 1], vertical_alignment="center")
                     with dcol:
                         st.markdown(f"""
 <div class="nr-doc">
-  <div class="nr-doc-title">{icon}&nbsp; {doc['title']}</div>
+  <div class="nr-doc-title">{icon}&nbsp; {_html.escape(doc['title'])}{type_badge}</div>
   <div class="nr-doc-meta">
-    {doc.get('source', '')} &nbsp;·&nbsp; {created}
+    {_html.escape(doc.get('source', ''))} &nbsp;·&nbsp; {created}
     &nbsp;·&nbsp; <span class="nr-chunk-badge">{doc.get('chunk_count', 0)} chunks</span>
   </div>
 </div>""", unsafe_allow_html=True)
@@ -1206,6 +1240,28 @@ elif st.session_state.nav == "documents":
                             if res is not None:
                                 st.toast(f"'{doc['title']}' deleted")
                                 st.rerun()
+                    # ── Schema detail expander (only when extraction ran) ──────
+                    if schema:
+                        with st.expander("Schema details", expanded=False):
+                            summary = schema.get("summary", "")
+                            if summary:
+                                st.markdown(f"**Summary:** {summary}")
+                            sc1, sc2, sc3 = st.columns(3)
+                            with sc1:
+                                entities = schema.get("entities", [])
+                                if entities:
+                                    st.markdown("**Entities**")
+                                    st.markdown("\n".join(f"- {e}" for e in entities))
+                            with sc2:
+                                topics = schema.get("key_topics", [])
+                                if topics:
+                                    st.markdown("**Key Topics**")
+                                    st.markdown("\n".join(f"- {t}" for t in topics))
+                            with sc3:
+                                dates = schema.get("key_dates", [])
+                                if dates:
+                                    st.markdown("**Key Dates**")
+                                    st.markdown("\n".join(f"- {dt}" for dt in dates))
 
     # ── Upload tab ────────────────────────────────────────────────────────────
     with tab_upload:

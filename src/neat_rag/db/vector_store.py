@@ -63,8 +63,16 @@ class VectorStoreBase(ABC):
         embedding: List[float],
         top_k: int,
         user_id: Optional[str],
+        document_ids: Optional[List[str]] = None,
     ) -> List[SearchHit]:
-        """Pure dense-vector similarity search."""
+        """Pure dense-vector similarity search.
+
+        Args:
+            document_ids: When provided, restricts results to chunks belonging
+                          to these document IDs.  Pass IDs returned by the
+                          search_by_schema_field agent tool to scope a semantic
+                          search to a filtered document set.
+        """
 
     @abstractmethod
     async def hybrid_search(
@@ -74,8 +82,16 @@ class VectorStoreBase(ABC):
         top_k: int,
         user_id: Optional[str],
         text_weight: float = 0.3,
+        document_ids: Optional[List[str]] = None,
     ) -> List[SearchHit]:
-        """Hybrid search: dense vector + keyword recall, fused by score."""
+        """Hybrid search: dense vector + keyword recall, fused by score.
+
+        Args:
+            document_ids: When provided, restricts results to chunks belonging
+                          to these document IDs.  Pass IDs returned by the
+                          search_by_schema_field agent tool to scope a hybrid
+                          search to a filtered document set.
+        """
 
 
 # ── Factory ──────────────────────────────────────────────────────────────────

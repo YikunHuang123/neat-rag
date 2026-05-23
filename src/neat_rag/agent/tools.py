@@ -60,6 +60,7 @@ async def hybrid_search(
     ctx: RunContext[AgentContext],
     query: str,
     limit: int = 10,
+    document_ids: list[str] | None = None,
 ) -> str:
     """
     Search for relevant information using both semantic and keyword matching.
@@ -68,16 +69,20 @@ async def hybrid_search(
     similarity with keyword search for the best overall accuracy.
 
     Args:
-        query: The search query — a question or keywords to look up.
-        limit: Maximum number of chunks to return (1–50, default 10).
+        query:        The search query — a question or keywords to look up.
+        limit:        Maximum number of chunks to return (1–50, default 10).
+        document_ids: Optional list of document UUIDs to restrict the search
+                      scope.  Pass the IDs returned by search_by_schema_field
+                      to confine this search to a specific set of documents.
     """
-    return await _run_advanced_search(ctx, query, limit, search_mode="hybrid")
+    return await _run_advanced_search(ctx, query, limit, search_mode="hybrid", document_ids=document_ids)
 
 
 async def vector_search(
     ctx: RunContext[AgentContext],
     query: str,
     limit: int = 10,
+    document_ids: list[str] | None = None,
 ) -> str:
     """
     Search for semantically similar content in the knowledge base.
@@ -86,10 +91,13 @@ async def vector_search(
     matching is less important than semantic understanding.
 
     Args:
-        query: The search query.
-        limit: Maximum number of chunks to return (1–50, default 10).
+        query:        The search query.
+        limit:        Maximum number of chunks to return (1–50, default 10).
+        document_ids: Optional list of document UUIDs to restrict the search
+                      scope.  Pass the IDs returned by search_by_schema_field
+                      to confine this search to a specific set of documents.
     """
-    return await _run_advanced_search(ctx, query, limit, search_mode="vector")
+    return await _run_advanced_search(ctx, query, limit, search_mode="vector", document_ids=document_ids)
 
 
 async def _run_advanced_search(
@@ -97,6 +105,7 @@ async def _run_advanced_search(
     query: str,
     limit: int,
     search_mode: str = "hybrid",
+    document_ids: list[str] | None = None,
 ) -> str:
     """Internal helper to handle the full retrieval -> rerank -> citation pipeline."""
     try:
@@ -118,11 +127,11 @@ async def _run_advanced_search(
             if search_mode == "hybrid":
                 res = await ctx.deps.hybrid_retriever.search(
                     q, top_k=k, text_weight=ctx.deps.default_text_weight,
-                    user_id=ctx.deps.user_id,
+                    user_id=ctx.deps.user_id, document_ids=document_ids,
                 )
             else:
                 res = await ctx.deps.vector_retriever.search(
-                    q, top_k=k, user_id=ctx.deps.user_id,
+                    q, top_k=k, user_id=ctx.deps.user_id, document_ids=document_ids,
                 )
             all_results.append(res.hits)
 
@@ -147,12 +156,36 @@ async def _run_advanced_search(
                 "as there is no context to reference."
             )
 
-        # 5. Citation Formatting — start numbering after already-accumulated citations
+        # 5. Context Augmentation — prepend document-level structured metadata so
+        #    the LLM can reason over document-wide facts (dates, parties, type)
+        #    without needing extra tool calls.
+        preamble = ""
+        if settings.ENABLE_CONTEXT_AUGMENTATION:
+            unique_doc_ids = list({h.document_id for h in hits})
+            async with ctx.deps.pg_pool.get_connection() as conn:
+                doc_repo = DocumentRepository(conn)
+                schemas = await doc_repo.get_document_schemas_batch(unique_doc_ids)
+            if schemas:
+                lines = ["[Document Metadata Context — use to support reasoning, do not cite directly]"]
+                for doc_id, schema in schemas.items():
+                    title = next(
+                        (h.document_title for h in hits if h.document_id == doc_id),
+                        doc_id,
+                    )
+                    lines.append(
+                        f'  "{title}": type={schema.get("document_type", "unknown")}'
+                        f', key_dates={schema.get("key_dates", [])}'
+                        f', entities={schema.get("entities", [])[:5]}'
+                        f', summary={schema.get("summary", "")}'
+                    )
+                preamble = "\n".join(lines) + "\n\n"
+
+        # 6. Citation Formatting — start numbering after already-accumulated citations
         offset = len(ctx.deps.citations)
         context_str, citations = build_citation_context(hits, offset=offset)
         ctx.deps.citations.extend(citations)
 
-        return context_str
+        return preamble + context_str
 
     except Exception as e:
         logger.error(f"{search_mode}_search tool error", query=query[:60], error=str(e))
@@ -238,12 +271,111 @@ async def list_documents(
         logger.error("list_documents tool error", error=str(e))
         return []
 
+async def search_by_schema_field(
+    ctx: RunContext[AgentContext],
+    document_type: str | None = None,
+    entity: str | None = None,
+    topic: str | None = None,
+) -> str:
+    """
+    Filter documents by structured metadata extracted at ingestion time.
+
+    Use this tool ONLY when you need to discover which documents match a
+    structural filter — a document category, a named entity, or a topic.
+    It does NOT search document content.
+
+    After calling this tool, pass the returned document IDs to hybrid_search
+    (document_ids=[...]) to search content within those specific documents.
+
+    Do NOT use this for general content questions — call hybrid_search directly
+    for those.  This tool is useful for questions like:
+      - "Find all contracts in the knowledge base"
+      - "Which documents mention Acme Corp?"
+      - "Show me documents about revenue"
+
+    Args:
+        document_type: A document category to match against the extracted
+                       document_type field (e.g. 'contract', 'invoice',
+                       'report', 'paper', 'email').
+        entity:        A named entity (person, organisation, location) to
+                       search for in the extracted entities list.
+        topic:         A keyword to match against the extracted key_topics list.
+    """
+    if not any([document_type, entity, topic]):
+        return "Provide at least one filter: document_type, entity, or topic."
+
+    try:
+        # Use JSONB @> containment to filter by document_type at the database level.
+        # entity and topic filters are applied in Python because array element
+        # substring matching is more readable than JSONB path operators for this case.
+        metadata_filter: dict | None = None
+        if document_type:
+            metadata_filter = {"structured_schema": {"document_type": document_type}}
+
+        async with ctx.deps.pg_pool.get_connection() as conn:
+            doc_repo = DocumentRepository(conn)
+            docs = await doc_repo.list_documents(
+                limit=50,
+                metadata_filter=metadata_filter,
+                user_id=ctx.deps.user_id,
+            )
+
+        # Post-filter for entity / topic (case-insensitive substring match)
+        if entity:
+            entity_lower = entity.lower()
+            docs = [
+                d for d in docs
+                if any(
+                    entity_lower in e.lower()
+                    for e in d.metadata.get("structured_schema", {}).get("entities", [])
+                )
+            ]
+        if topic:
+            topic_lower = topic.lower()
+            docs = [
+                d for d in docs
+                if any(
+                    topic_lower in t.lower()
+                    for t in d.metadata.get("structured_schema", {}).get("key_topics", [])
+                )
+            ]
+
+        # Further narrow to documents that actually have a structured_schema
+        # (handles the case where metadata_filter was None but entity/topic filters ran)
+        docs = [d for d in docs if d.metadata.get("structured_schema")]
+
+        if not docs:
+            return (
+                "No documents found matching the specified schema filters. "
+                "The knowledge base may not have schema extraction enabled, or "
+                "no documents match the given criteria."
+            )
+
+        lines = [f"Found {len(docs)} document(s) matching the schema filter:"]
+        for d in docs:
+            schema = d.metadata.get("structured_schema", {})
+            doc_type = schema.get("document_type", "unknown")
+            summary = schema.get("summary", "No summary available.")
+            lines.append(f'  [{d.id}] "{d.title}" (type={doc_type}): {summary}')
+
+        lines.append(
+            "\nTo search content within these documents, call:"
+            "\n  hybrid_search(query=<your question>, document_ids=[<id1>, <id2>, ...])"
+        )
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.error("search_by_schema_field tool error", error=str(e))
+        return f"Error filtering documents by schema: {e}"
+
+
 # ---------------------------------------------------------------------------
 # Tool Registry
 # ---------------------------------------------------------------------------
 AGENT_TOOLS = [
     hybrid_search,
     vector_search,
+    search_by_schema_field,
     get_document,
     list_documents,
 ]
