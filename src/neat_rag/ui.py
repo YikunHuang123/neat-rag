@@ -1192,28 +1192,38 @@ elif st.session_state.nav == "documents":
             if not docs:
                 st.info("No documents yet — use the Upload tab to add some.")
             else:
-                # ── Type filter (only shown when at least one doc has schema data) ──
+                # ── Schema filter (only shown when at least one doc has schema data) ──
                 has_schemas = any(
                     d.get("metadata", {}).get("structured_schema") for d in docs
                 )
-                type_filter = ""
+                schema_query = ""
                 if has_schemas:
-                    type_filter = st.text_input(
-                        "Filter by document type",
-                        placeholder="Filter by document type (e.g. contract, report, invoice)…",
+                    schema_query = st.text_input(
+                        "Search by type, entity, or topic",
+                        placeholder="Search by type, entity, or topic (e.g. report, Alice, revenue)…",
                         label_visibility="collapsed",
                     )
-                if type_filter.strip():
-                    tf = type_filter.strip().lower()
-                    docs = [
-                        d for d in docs
-                        if tf in (
-                            d.get("metadata", {})
-                            .get("structured_schema", {})
-                            .get("document_type", "") or ""
-                        ).lower()
-                    ]
-                    st.caption(f"{len(docs)} result(s) for type '{type_filter.strip()}'")
+
+                if schema_query.strip():
+                    q = schema_query.strip().lower()
+                    filtered = []
+                    for d in docs:
+                        schema = d.get("metadata", {}).get("structured_schema") or {}
+                        
+                        # Check type
+                        d_type = (schema.get("document_type", "") or "").lower()
+                        # Check entities
+                        d_entities = [e.lower() for e in schema.get("entities", [])]
+                        # Check topics
+                        d_topics = [t.lower() for t in schema.get("key_topics", [])]
+                        
+                        if (q in d_type or 
+                            any(q in e for e in d_entities) or 
+                            any(q in t for t in d_topics)):
+                            filtered.append(d)
+                    
+                    docs = filtered
+                    st.caption(f"{len(docs)} result(s) for '{schema_query.strip()}'")
 
                 for doc in docs:
                     schema = doc.get("metadata", {}).get("structured_schema") or {}
