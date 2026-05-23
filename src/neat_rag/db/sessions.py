@@ -235,11 +235,14 @@ class SessionRepository:
             if limit is not None:
                 rows = await self.conn.fetch(
                     """
-                    SELECT id::text, session_id::text, role, content, metadata, created_at
-                    FROM messages
-                    WHERE session_id = $1::uuid
+                    SELECT * FROM (
+                        SELECT id::text, session_id::text, role, content, metadata, created_at
+                        FROM messages
+                        WHERE session_id = $1::uuid
+                        ORDER BY created_at DESC
+                        LIMIT $2
+                    ) sub
                     ORDER BY created_at ASC
-                    LIMIT $2
                     """,
                     session_id,
                     limit,
