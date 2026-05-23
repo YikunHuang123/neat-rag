@@ -189,6 +189,10 @@ async def chat_stream(
                 )
                 # Simulate streaming output so the UI still animates.
                 text = result.output
+
+                # CRITICAL: Sanitize the full text BEFORE yielding deltas so the UI is clean.
+                text = sanitize_answer(text, ctx.citations)
+
                 chunk_size = 15
                 for i in range(0, len(text), chunk_size):
                     chunk = text[i:i+chunk_size]
