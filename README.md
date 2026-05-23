@@ -762,7 +762,7 @@ neat_rag/
     - **Plan-and-Execute (Multi-step Reasoning)**: For complex questions, a planner node first decomposes the query into sub-questions. Each sub-question is then retrieved and answered independently, and the results are synthesised into a final, coherent response — improving accuracy across multi-document reasoning tasks.
     - **Corrective RAG (CRAG)**: After generating an answer, a verification node checks whether the response is grounded in the retrieved documents. If confidence is low, the graph triggers a fallback (e.g., web search or broader retrieval) before returning the final answer, reducing hallucinations on knowledge-boundary queries.
 - **The markdown output of current models occasionally appears incorrectly rendered**
-- **Hallucinated citation markers sometimes appear** — used rules to fix the hallucinated citations in standard block output. But it's hard to fix them in streaming output because it depends on how well the model follows instructions. Will consider adjusting the prompts, or filtering the text again after it is fully generated.
+- **Hallucinated citation markers sometimes appear** — used rules to fix the hallucinated citations in standard block output. But it's hard to fix them in streaming output because it depends on how well the model follows instructions. Will consider adjusting the prompts, or filtering the text again after it is fully generated, or try Sliding Window State Machine.
 
 
 ---
