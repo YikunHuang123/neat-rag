@@ -220,10 +220,6 @@ async def chat_stream(
         # Sanitize the full answer before persistence and final response
         full_answer = sanitize_answer(full_answer, ctx.citations)
 
-        if not citations and ctx.citations:
-            logger.warning("No citation markers in response; falling back to all retrieved citations", session_id=body.session_id)
-            citations = ctx.citations
-
         # Persist both sides of the exchange using a fresh connection.
         async with pg_pool.get_connection() as persist_conn:
             repo = SessionRepository(persist_conn)

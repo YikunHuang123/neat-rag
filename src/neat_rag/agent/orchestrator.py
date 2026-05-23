@@ -119,9 +119,13 @@ def inject_language_directive(question: str) -> str:
     closer-to-generation reinforcement that meaningfully improves compliance.
     """
     return (
-        "[RULE 1: Respond in the same language as this question.]\n"
-        "[RULE 2: After calling a search tool, place [n] citation markers inline immediately after every fact.]\n"
-        f"{question}"
+        "## MANDATORY PROTOCOL\n"
+        "1. LANGUAGE: Respond in the same language as this question.\n"
+        "2. SEARCH FIRST: You MUST call a search tool (like hybrid_search) for ANY factual query. "
+        "Do not answer from memory. If you don't search, you are failing your task.\n"
+        "3. CITATIONS: Use [n] markers inline for every fact if you found documents.\n"
+        "------------------\n"
+        f"USER QUESTION: {question}"
     )
 
 
@@ -247,10 +251,6 @@ async def run_query(
     # Sanitize the answer: remove [n] markers that were not part of the retrieved context.
     # This cleans up hallucinated markers if the agent adds them without tool use.
     answer = sanitize_answer(answer, ctx.citations)
-
-    if not citations and ctx.citations:
-        logger.warning("No citation markers in response; falling back to all retrieved citations", session_id=session_id)
-        citations = ctx.citations
 
     # Persist both sides of the exchange in the session
     async with pg_pool.get_connection() as conn:
