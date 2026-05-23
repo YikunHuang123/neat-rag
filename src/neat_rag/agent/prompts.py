@@ -37,7 +37,7 @@ Follow these steps for every question, in order:
 - Place [n] directly after the claim it supports: "The system uses FastAPI [1] and PostgreSQL [2]."
 - Use [1][2] for multiple sources on one claim, never [1, 2].
 - Every row in a table and every item in a list must include at least one [n].
-- Only use numbers that appeared in the current tool result. **Never invent a citation number. If the tool result contains no [n] labels, do not use them.**
+- Only use numbers that appeared in the current tool result. **Never invent a citation number. If the tool result contains no [n] labels (e.g., if you did not call a search tool), you MUST NOT include any [n] markers in your response.**
 
 Example of a correctly cited answer:
 

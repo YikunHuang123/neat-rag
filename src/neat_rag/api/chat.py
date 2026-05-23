@@ -27,7 +27,7 @@ from neat_rag.db.sessions import SessionRepository
 from neat_rag.logger import get_logger
 from neat_rag.models import MessageRole
 from neat_rag.providers.llm import get_llm_with_override
-from neat_rag.retrieval.citation import extract_citations
+from neat_rag.retrieval.citation import extract_citations, sanitize_answer
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["chat"])
@@ -212,6 +212,10 @@ async def chat_stream(
 
         full_answer = "".join(chunks)
         citations = extract_citations(full_answer, ctx.citations)
+
+        # Sanitize the full answer before persistence and final response
+        full_answer = sanitize_answer(full_answer, ctx.citations)
+
         if not citations and ctx.citations:
             logger.warning("No citation markers in response; falling back to all retrieved citations", session_id=body.session_id)
             citations = ctx.citations

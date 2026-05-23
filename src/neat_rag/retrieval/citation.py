@@ -104,3 +104,25 @@ def extract_citations(answer: str, citations: list[Citation]) -> list[Citation]:
         [c for c in citations if c.citation_number in real_refs],
         key=lambda c: c.citation_number,
     )
+
+
+def sanitize_answer(answer: str, valid_citations: list[Citation]) -> str:
+    """
+    Remove [n] markers from the answer that do not exist in the valid_citations list.
+
+    This handles "benign hallucinations" where the LLM adds citation markers
+    to appear professional even when no documents were retrieved or when
+    referencing non-existent chunks.
+    """
+    valid_numbers = {c.citation_number for c in valid_citations}
+
+    def _replace_marker(match: re.Match) -> str:
+        num = int(match.group(1))
+        return match.group(0) if num in valid_numbers else ""
+
+    # Replace [n] with empty string if n is not in valid_numbers
+    sanitized = re.sub(r"\[(\d+)\]", _replace_marker, answer)
+
+    # Clean up double spaces or trailing spaces created by removal
+    sanitized = re.sub(r" +", " ", sanitized).strip()
+    return sanitized

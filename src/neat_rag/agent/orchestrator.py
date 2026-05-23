@@ -38,7 +38,7 @@ from neat_rag.providers.embedding import get_embedder
 from neat_rag.providers.llm import get_llm
 from neat_rag.providers.reranker import get_reranker, CrossEncoderReranker, CohereReranker
 from neat_rag.retrieval.retrievers import HybridRetriever, VectorRetriever
-from neat_rag.retrieval.citation import extract_citations
+from neat_rag.retrieval.citation import extract_citations, sanitize_answer
 from neat_rag.models import MessageRole, SearchType, Citation
 
 logger = get_logger(__name__)
@@ -240,8 +240,14 @@ async def run_query(
     )
 
     answer: str = result.output
+
     # Filter only the citations that the agent actually mentioned in its response
     citations = extract_citations(answer, ctx.citations)
+
+    # Sanitize the answer: remove [n] markers that were not part of the retrieved context.
+    # This cleans up hallucinated markers if the agent adds them without tool use.
+    answer = sanitize_answer(answer, ctx.citations)
+
     if not citations and ctx.citations:
         logger.warning("No citation markers in response; falling back to all retrieved citations", session_id=session_id)
         citations = ctx.citations
